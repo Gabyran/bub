@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
@@ -33,54 +32,30 @@ class CliRenderer:
             return
         self.console.print(Text(text, style="bright_black"))
 
-    def panel(self, kind: MessageKind, text: str) -> Panel:
-        title, border_style = self._panel_style(kind)
-        return Panel(text, title=title, border_style=border_style)
-
     def command_output(self, text: str) -> None:
         if not text.strip():
             return
-        self.console.print(self.panel("command", text))
+        self.console.print(f"[cyan bold]Command >[/]\n{text}")
 
     def assistant_output(self, text: str) -> None:
         if not text.strip():
             return
-        self.console.print(self.panel("normal", text))
+        self.console.print(f"[blue bold]Assistant >[/]\n{text}")
 
     def error(self, text: str) -> None:
         if not text.strip():
             return
-        self.console.print(self.panel("error", text))
+        self.console.print(f"[red bold]Error >[/]\n{text}")
+
+    def print_head(self, kind: MessageKind) -> None:
+        if kind == "command":
+            self.console.print("[cyan bold]Command >[/]")
+        elif kind == "error":
+            self.console.print("[red bold]Error >[/]")
+        else:
+            self.console.print("[blue bold]Assistant >[/]")
 
     def log(self, message: object) -> None:
         text = str(message).rstrip()
         if text:
             self.console.print(text)
-
-    def start_stream(self, kind: MessageKind, text: str) -> Live:
-        live = Live(
-            self.panel(kind, text),
-            console=self.console,
-            auto_refresh=False,
-            transient=False,
-            vertical_overflow="visible",
-        )
-        live.start(refresh=True)
-        return live
-
-    def update_stream(self, live: Live, *, kind: MessageKind, text: str) -> None:
-        live.update(self.panel(kind, text), refresh=True)
-
-    def finish_stream(self, live: Live, *, kind: MessageKind, text: str) -> None:
-        live.update(self.panel(kind, text), refresh=True)
-        live.stop()
-
-    @staticmethod
-    def _panel_style(kind: MessageKind) -> tuple[str, str]:
-        match kind:
-            case "error":
-                return "Error", "red"
-            case "command":
-                return "Command", "green"
-            case _:
-                return "Assistant", "blue"

@@ -11,7 +11,6 @@ from republic import StreamEvent
 
 from bub.channels.base import Channel, Interface, Lifecycle
 from bub.channels.cli import CliChannel
-from bub.channels.cli import renderer as cli_renderer
 from bub.channels.cli.renderer import CliRenderer
 from bub.channels.handler import BufferedMessageHandler
 from bub.channels.manager import ChannelManager
@@ -450,33 +449,30 @@ def test_cli_channel_normalize_input_prefixes_shell_commands() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cli_channel_stream_events_renders_stream_and_yields_events() -> None:
+async def test_cli_channel_stream_events_prints_stream_and_yields_events(monkeypatch: pytest.MonkeyPatch) -> None:
     channel = CliChannel.__new__(CliChannel)
-    events: list[tuple[str, str, str]] = []
-    live_handle = object()
-    channel._renderer = SimpleNamespace(
-        start_stream=lambda kind, text: events.append(("start", kind, text)) or live_handle,
-        update_stream=lambda live, *, kind, text: events.append(("update", kind, text)),
-        finish_stream=lambda live, *, kind, text: events.append(("finish", kind, text)),
-        error=lambda content: events.append(("error", "error", content)),
-        command_output=lambda content: events.append(("send", "command", content)),
-        assistant_output=lambda content: events.append(("send", "normal", content)),
+    heads: list[str] = []
+    printed: list[tuple[str, str | None, bool | None]] = []
+    channel._renderer = SimpleNamespace(print_head=heads.append)
+    monkeypatch.setattr(
+        "bub.channels.cli.get_console",
+        lambda: SimpleNamespace(
+            print=lambda content, end=None, highlight=None: printed.append((content, end, highlight))
+        ),
     )
 
     message = _message("ignored", channel="cli", kind="command", session_id="cli:1")
 
     async def source() -> asyncio.AsyncIterator[StreamEvent]:
+        yield StreamEvent("text", {"delta": "  "})
         yield StreamEvent("text", {"delta": "hel"})
         yield StreamEvent("text", {"delta": "lo"})
         yield StreamEvent("final", {})
 
     yielded = [event async for event in channel.stream_events(message, source())]
 
-    assert events == [
-        ("start", "command", "hel"),
-        ("update", "command", "hello"),
-        ("finish", "command", "hello"),
-    ]
+    assert heads == ["command"]
+    assert printed == [("hel", "", False), ("lo", "", False), ("\n", None, None)]
     assert [event.kind for event in yielded] == ["text", "text", "final"]
 
 
@@ -490,38 +486,21 @@ def test_cli_channel_history_file_uses_workspace_hash(tmp_path: Path) -> None:
     assert result.suffix == ".history"
 
 
-def test_cli_renderer_stream_uses_live_with_initial_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    live_calls: list[tuple[str, object]] = []
-
-    class FakeLive:
-        def __init__(self, renderable, **kwargs) -> None:
-            live_calls.append(("init", renderable))
-            live_calls.append(("transient", kwargs["transient"]))
-            self.renderable = renderable
-
-        def start(self, *, refresh: bool = False) -> None:
-            live_calls.append(("start_refresh", refresh))
-
-        def update(self, renderable, *, refresh: bool = False) -> None:
-            live_calls.append(("update_refresh", refresh))
-            self.renderable = renderable
-
-        def stop(self) -> None:
-            live_calls.append(("stop", self.renderable))
-
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("command", "[cyan bold]Command >[/]"),
+        ("error", "[red bold]Error >[/]"),
+        ("normal", "[blue bold]Assistant >[/]"),
+    ],
+)
+def test_cli_renderer_print_head_uses_message_kind(kind: str, expected: str) -> None:
     printed: list[str] = []
-    console = SimpleNamespace(print=printed.append)
-    monkeypatch.setattr(cli_renderer, "Live", FakeLive)
+    renderer = CliRenderer(SimpleNamespace(print=printed.append))  # type: ignore[arg-type]
 
-    renderer = CliRenderer(console)  # type: ignore[arg-type]
-    live = renderer.start_stream("normal", "hel")
-    renderer.update_stream(live, kind="normal", text="hello")  # type: ignore[arg-type]
-    renderer.finish_stream(live, kind="normal", text="hello")  # type: ignore[arg-type]
+    renderer.print_head(kind)  # type: ignore[arg-type]
 
-    assert ("transient", False) in live_calls
-    assert ("start_refresh", True) in live_calls
-    assert ("update_refresh", True) in live_calls
-    assert not printed
+    assert printed == [expected]
 
 
 def test_bub_message_filter_accepts_private_messages() -> None:

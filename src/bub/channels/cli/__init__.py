@@ -14,7 +14,6 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from republic import StreamEvent
 from rich import get_console
-from rich.live import Live
 
 import bub
 from bub.builtin.agent import Agent
@@ -141,23 +140,21 @@ class CliChannel(Interface):
     async def stream_events(
         self, message: ChannelMessage, stream: AsyncIterable[StreamEvent]
     ) -> AsyncIterable[StreamEvent]:
-        live: Live | None = None
-        text = ""
-        try:
-            async for event in stream:
-                if event.kind == "text":
-                    content = str(event.data.get("delta", ""))
-                    if not content.strip() and not text:
-                        continue  # skip leading whitespace-only events
-                    text += content
-                    if live is None:
-                        live = self._renderer.start_stream(message.kind, text)
-                    else:
-                        self._renderer.update_stream(live, kind=message.kind, text=text)
-                yield event
-        finally:
-            if live is not None:
-                self._renderer.finish_stream(live, kind=message.kind, text=text)
+        head_printed = False
+        console = get_console()
+        async for event in stream:
+            if event.kind == "text":
+                content = str(event.data.get("delta", ""))
+                if not content.strip() and not head_printed:
+                    continue  # skip leading whitespace-only events
+                if not head_printed:
+                    self._renderer.print_head(message.kind)
+                    head_printed = True
+
+                console.print(content, end="", highlight=False)
+            elif event.kind == "final":
+                console.print("\n")  # ensure we end with a newline after the final event
+            yield event
 
     def _build_prompt(self, workspace: Path) -> PromptSession[str]:
         kb = KeyBindings()
