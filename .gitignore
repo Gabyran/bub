@@ -17,6 +17,11 @@ web-articles/
 /provider-presets/
 /skills/
 /soul/
+/provider-presets
+/skills
+/soul
+/task-tracker
+/web-articles
 *.pid
 *.out
 
