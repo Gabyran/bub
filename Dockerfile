@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM python:3.12-slim
 
 # Update system and install base dependencies
 RUN apt-get update && \
@@ -35,6 +35,10 @@ RUN npm install -g \
     @openai/codex \
     @jackwener/opencli@1.8.1 \
     @larksuite/cli@1.0.44
+
+# Install uv after switching to the standard Python base image. Docker Hub is
+# more reliable from the target server than ghcr.io in this environment.
+RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 # Install Python dependencies first (cached layer)
