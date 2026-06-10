@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 RUN sed -i \
     -e 's|http://deb.debian.org/debian-security|http://mirrors.tencent.com/debian-security|g' \
     -e 's|http://deb.debian.org/debian|http://mirrors.tencent.com/debian|g' \
