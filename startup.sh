@@ -6,7 +6,14 @@ BUB_BIN="${BUB_BIN:-/app/.venv/bin/bub}"
 PYTHON_BIN="${PYTHON_BIN:-/app/.venv/bin/python}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 export BUB_CONFIG="${BUB_CONFIG:-${WORKSPACE_DIR}/config.yml}"
-export BUB_RUNTIME_SRC="${BUB_RUNTIME_SRC:-${WORKSPACE_DIR}/src/bub-runtime/src}"
+if [[ -z "${BUB_RUNTIME_SRC:-}" ]]; then
+  if [[ -d "${WORKSPACE_DIR}/src/bub" ]]; then
+    BUB_RUNTIME_SRC="${WORKSPACE_DIR}/src"
+  else
+    BUB_RUNTIME_SRC="${WORKSPACE_DIR}/src/bub-runtime/src"
+  fi
+fi
+export BUB_RUNTIME_SRC
 STATE_DIR="${BUB_HOME:-/data}/telegram-native"
 FEISHU_STATE_DIR="${BUB_HOME:-/data}/feishu-native"
 OFFSET_FILE="${STATE_DIR}/offset"
