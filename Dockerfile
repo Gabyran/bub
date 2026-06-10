@@ -22,21 +22,27 @@ RUN apt-get install -y --no-install-recommends \
     npm \
     golang \
     jq \
+    socat \
     htop \
     tree \
     unzip \
     protobuf-compiler \
     zip fd-find gh
 
-# Install pnpm and OpenAI Codex CLI
-RUN npm install -g pnpm && npm install -g @openai/codex
+# Install JS CLIs used by the native channel startup scripts.
+RUN npm install -g \
+    pnpm \
+    @openai/codex \
+    @jackwener/opencli@1.8.1 \
+    @larksuite/cli@1.0.44
 
 WORKDIR /app
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml uv.lock README.md LICENSE entrypoint.sh ./
 # Copy the full source and install
 COPY src ./src
-RUN uv sync --no-dev --no-editable && uv pip install "any-llm-sdk[gemini,xai]" && \
+RUN uv sync --no-dev --no-editable && \
+    uv pip install "any-llm-sdk[gemini,xai]" "lark-oapi==1.6.8" && \
     chmod +x /app/entrypoint.sh
 
 WORKDIR /workspace

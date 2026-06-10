@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+import yaml
 
 CONFIG_MAP: dict[str, list[type[BaseSettings]]] = {}
 ROOT = ""
@@ -41,14 +42,43 @@ def config[C: type[BaseSettings]](name: str = ROOT) -> Callable[[C], C]:
 
 def load(config_file: Path) -> dict[str, Any]:
     """Load config from a file."""
-    import yaml
-
     _global_config.clear()
     _config_data.clear()
     if config_file.exists():
-        with config_file.open() as f:
-            _config_data.update(yaml.safe_load(f) or {})
+        _config_data.update(load_yaml_mapping(config_file))
     return _config_data
+
+
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_unique_mapping(loader: UniqueKeySafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            mark = key_node.start_mark
+            raise ValueError(f"duplicate YAML key {key!r} at line {mark.line + 1}, column {mark.column + 1}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
+def load_yaml_mapping(config_file: Path) -> dict[str, Any]:
+    """Load a YAML mapping and fail on duplicate keys instead of overwriting them."""
+    if not config_file.exists():
+        return {}
+    with config_file.open(encoding="utf-8") as f:
+        data = yaml.load(f, Loader=UniqueKeySafeLoader) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{config_file} must contain a YAML mapping.")
+    return data
 
 
 def merge(base: dict[str, Any], *updates: dict[str, Any]) -> dict[str, Any]:
@@ -71,12 +101,15 @@ def validate(config_data: dict[str, Any]) -> dict[str, Any]:
 
 def save(config_file: Path, config_data: dict[str, Any]) -> None:
     """Validate and persist config data to a YAML file."""
-    import yaml
-
     validated = validate(config_data)
     config_file.parent.mkdir(parents=True, exist_ok=True)
     with config_file.open("w", encoding="utf-8") as f:
         yaml.safe_dump(validated, f, sort_keys=False)
+
+
+def data() -> dict[str, Any]:
+    """Return a copy of the loaded raw config data."""
+    return _copy_dict(_config_data)
 
 
 def ensure_config[C: BaseSettings](config_cls: type[C]) -> C:

@@ -91,6 +91,51 @@ class BuiltinImpl:
         choices.append("custom")
         return choices
 
+    @staticmethod
+    def _api_key_present(value: object) -> bool:
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return any(BuiltinImpl._api_key_present(item) for item in value.values())
+        return value not in (None, "")
+
+    @staticmethod
+    def _api_key_status(value: object) -> str:
+        if isinstance(value, dict):
+            present = [str(key) for key, item in sorted(value.items()) if BuiltinImpl._api_key_present(item)]
+            missing = [str(key) for key, item in sorted(value.items()) if not BuiltinImpl._api_key_present(item)]
+            parts: list[str] = []
+            if present:
+                parts.append(f"present: {', '.join(present)}")
+            if missing:
+                parts.append(f"missing: {', '.join(missing)}")
+            state = "present" if present else "missing"
+            return f"{state} (provider map; values masked; {'; '.join(parts)})"
+        return "present (masked)" if BuiltinImpl._api_key_present(value) else "missing"
+
+    @staticmethod
+    def _ask_api_key(current_config: dict[str, object]) -> tuple[str | None, bool]:
+        current_api_key = current_config.get("api_key")
+        typer.echo(f"Current api_key: {BuiltinImpl._api_key_status(current_api_key)}")
+        if BuiltinImpl._api_key_present(current_api_key):
+            action = bub_inquirer.ask_select(
+                "API key",
+                choices=["reuse existing", "enter new key", "clear existing"],
+                default="reuse existing",
+            )
+            if action == "reuse existing":
+                return None, False
+            if action == "clear existing":
+                return None, True
+        input_mode = bub_inquirer.ask_select("API key input", choices=["hidden", "visible"], default="hidden")
+        if input_mode == "visible":
+            typer.echo("Paste the new API key, then press Enter. Input will be visible.")
+            api_key = bub_inquirer.ask_text("New API key (optional)")
+        else:
+            typer.echo("Paste the new API key, then press Enter. Input is hidden.")
+            api_key = bub_inquirer.ask_secret("New API key (optional)")
+        return (api_key or None), False
+
     def _channel_choices(self) -> list[str]:
         return [c for c in self.framework.get_channels(self._discard_message) if c != "cli"]
 
@@ -177,6 +222,7 @@ class BuiltinImpl:
         app.command("install")(cli.install)
         app.command("uninstall")(cli.uninstall)
         app.command("update")(cli.update)
+        app.add_typer(cli.provider_app, name="provider")
 
     @hookimpl
     def onboard_config(self, current_config: dict[str, object]) -> dict[str, object] | None:
@@ -197,7 +243,7 @@ class BuiltinImpl:
             model_name = model_name_default
         model = f"{provider}:{model_name}"
 
-        api_key = bub_inquirer.ask_secret("API key (optional)")
+        api_key, clear_api_key = self._ask_api_key(current_config)
 
         current_api_base = current_config.get("api_base")
         api_base_default = str(current_api_base) if isinstance(current_api_base, str) else ""
@@ -229,6 +275,8 @@ class BuiltinImpl:
         }
         if api_key:
             config["api_key"] = api_key
+        elif clear_api_key:
+            config["api_key"] = None
         if api_base:
             config["api_base"] = api_base
         return config

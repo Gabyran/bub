@@ -1,5 +1,22 @@
 docs/source
 
+# Local/server Bub runtime state. Keep these in the server data volume,
+# not in the public fork.
+config.yml
+tapes.db
+tapes/
+history/
+logs/
+feishu-logs/
+feishu-native/
+feishu-sessions/
+telegram-native/
+backups/
+task-tracker/
+web-articles/
+*.pid
+*.out
+
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
 
 # Byte-compiled / optimized / DLL files

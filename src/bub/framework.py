@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import pluggy
 import typer
@@ -20,7 +21,6 @@ from bub import configure
 from bub.envelope import content_of, field_of, unpack_batch
 from bub.hook_runtime import _SKIP_VALUE, HookRuntime
 from bub.hookspecs import BUB_HOOK_NAMESPACE, BubHookSpecs
-from bub.turn_admission import AdmitDecision, SteeringBuffer, TurnSnapshot
 from bub.types import Envelope, MessageHandler, OutboundChannelRouter, TurnResult
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 load_dotenv()
-DEFAULT_HOME = Path.home() / ".bub"
+DEFAULT_HOME = Path(os.environ.get("BUB_HOME", Path.home() / ".bub")).expanduser()
 DEFAULT_CONFIG_FILE = (DEFAULT_HOME / "config.yml").resolve()
 
 
@@ -49,7 +49,6 @@ class BubFramework:
         self._hook_runtime = HookRuntime(self._plugin_manager)
         self._plugin_status: dict[str, PluginStatus] = {}
         self._outbound_router: OutboundChannelRouter | None = None
-        self._steering_buffers: dict[str, SteeringBuffer] = {}
         self._tape_store: TapeStore | AsyncTapeStore | None = None
         configure.load(self.config_file)
 
@@ -111,10 +110,12 @@ class BubFramework:
         """Run one inbound message through hooks and return turn result."""
 
         try:
-            session_id = await self.resolve_session(inbound)
+            session_id = await self._hook_runtime.call_first(
+                "resolve_session", message=inbound
+            ) or self._default_session_id(inbound)
             if isinstance(inbound, dict):
                 inbound.setdefault("session_id", session_id)
-            state = {"_runtime_workspace": str(self.workspace), "_runtime_steering": self.steering(session_id)}
+            state = {"_runtime_workspace": str(self.workspace)}
             for hook_state in reversed(
                 await self._hook_runtime.call_many("load_state", message=inbound, session_id=session_id)
             ):
@@ -145,12 +146,6 @@ class BubFramework:
             logger.exception("Error processing inbound message")
             await self._hook_runtime.notify_error(stage="turn", error=exc, message=inbound)
             raise
-
-    async def resolve_session(self, message: Envelope) -> str:
-        """Resolve the canonical session id for a message."""
-
-        resolved = await self._hook_runtime.call_first("resolve_session", message=message)
-        return str(resolved or self._default_session_id(message))
 
     async def _run_model(
         self,
@@ -212,27 +207,6 @@ class BubFramework:
     async def quit_via_router(self, session_id: str) -> None:
         if self._outbound_router is not None:
             await self._outbound_router.quit(session_id)
-
-    async def admit_message(self, *, session_id: str, message: Envelope, turn: TurnSnapshot) -> AdmitDecision | None:
-        return cast(
-            "AdmitDecision | None",
-            await self._hook_runtime.call_first(
-                "admit_message",
-                session_id=session_id,
-                message=message,
-                turn=turn,
-            ),
-        )
-
-    def steering(self, session_id: str) -> SteeringBuffer:
-        buffer = self._steering_buffers.get(session_id)
-        if buffer is None:
-            buffer = SteeringBuffer(session_id=session_id)
-            self._steering_buffers[session_id] = buffer
-        return buffer
-
-    def clear_steering(self, session_id: str) -> None:
-        self._steering_buffers.pop(session_id, None)
 
     @staticmethod
     def _default_session_id(message: Envelope) -> str:
@@ -313,7 +287,7 @@ class BubFramework:
         return self._hook_runtime.call_first_sync("build_tape_context")
 
     def collect_onboard_config(self) -> dict[str, Any]:
-        current_config: dict[str, Any] = {}
+        current_config = configure.data()
 
         for impl in reversed(list(self._hook_runtime._iter_hookimpls("onboard_config"))):
             result = self._hook_runtime._invoke_impl_sync(
