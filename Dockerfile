@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+RUN sed -i \
+    -e 's|http://deb.debian.org/debian-security|http://mirrors.tencent.com/debian-security|g' \
+    -e 's|http://deb.debian.org/debian|http://mirrors.tencent.com/debian|g' \
+    /etc/apt/sources.list.d/debian.sources
+
 # Update system and install base dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
