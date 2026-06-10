@@ -510,7 +510,7 @@ def _load_credentials():
     if not APP_ID or not APP_SECRET:
         try:
             import yaml
-            config_path = Path("/workspace/config.yml")
+            config_path = Path(os.environ.get("BUB_CONFIG", "/workspace/config.yml"))
             if config_path.exists():
                 with config_path.open("r", encoding="utf-8") as f:
                     config = yaml.safe_load(f)
@@ -524,7 +524,7 @@ def _load_credentials():
         print(
             "[feishu_native] ERROR: Missing Lark app credentials. "
             "Set BUB_LARK_APP_ID and BUB_LARK_APP_SECRET, "
-            "or add lark.app_id and lark.app_secret to /workspace/config.yml",
+            "or add lark.app_id and lark.app_secret to BUB_CONFIG",
             flush=True,
         )
         sys.exit(1)

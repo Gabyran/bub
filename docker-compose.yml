@@ -8,6 +8,7 @@ services:
       - .env
     environment:
       BUB_HOME: /data
+      BUB_CONFIG: /data/config.yml
     volumes:
       - ${BUB_WORKSPACE_PATH:-.}:/workspace
       - ${BUB_HOME_HOST:-${HOME}/.bub}:/data

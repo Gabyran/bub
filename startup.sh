@@ -5,6 +5,7 @@ set -Eeuo pipefail
 BUB_BIN="${BUB_BIN:-/app/.venv/bin/bub}"
 PYTHON_BIN="${PYTHON_BIN:-/app/.venv/bin/python}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
+export BUB_CONFIG="${BUB_CONFIG:-${WORKSPACE_DIR}/config.yml}"
 export BUB_RUNTIME_SRC="${BUB_RUNTIME_SRC:-${WORKSPACE_DIR}/src/bub-runtime/src}"
 STATE_DIR="${BUB_HOME:-/data}/telegram-native"
 FEISHU_STATE_DIR="${BUB_HOME:-/data}/feishu-native"
@@ -25,11 +26,12 @@ fi
 load_config_env() {
   eval "$("${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
+import os
 import json
 import shlex
 import yaml
 
-config_path = Path("/workspace/config.yml")
+config_path = Path(os.environ.get("BUB_CONFIG", "/workspace/config.yml"))
 data = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
 data = data or {}
 telegram = data.get("telegram") or {}
