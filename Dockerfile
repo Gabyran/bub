@@ -34,10 +34,12 @@ RUN apt-get install -y --no-install-recommends \
     protobuf-compiler \
     zip fd-find gh
 
-# Install JS CLIs used by the native channel startup scripts.
-RUN npm install -g \
-    pnpm \
-    @openai/codex \
+# Install JS CLIs used by the native channel startup scripts. Codex CLI is
+# intentionally left on the host because its npm installer pulls remote binaries
+# that are unreliable from the target server network.
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g \
+    pnpm@10 \
     @jackwener/opencli@1.8.1 \
     @larksuite/cli@1.0.44
 
