@@ -70,6 +70,30 @@ def bub_run_env() -> dict[str, str]:
     return env
 
 
+def sync_tape_db(direction: str) -> None:
+    """Mirror the tape database before and after each run when sync is configured."""
+    if not os.environ.get("BUB_TAPE_SYNC_BUCKET") or not os.environ.get("BUB_TAPE_SYNC_ENDPOINT"):
+        return
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "bub.tape_sync", direction],
+            capture_output=True,
+            text=True,
+            env=bub_run_env(),
+        )
+    except Exception as exc:
+        log_line(f"tape sync {direction} failed: {exc}")
+        return
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            log_line(f"tape sync {direction} failed exit_code={result.returncode} stderr={stderr[:300]}")
+        else:
+            log_line(f"tape sync {direction} failed exit_code={result.returncode}")
+
+
 @contextlib.contextmanager
 def single_consumer_lock():
     """Keep one Feishu consumer process active per state directory."""
@@ -242,78 +266,18 @@ def extract_media_info(event: dict) -> dict | None:
     return None
 
 
-def build_system_layer() -> str:
-    """Layer 1: System Prompt — identity, rules, available tools/skills.
 
-    This layer is static (does not change per event). It defines who the AI
-    is, what tools it has, and how it should behave.  The persona comes from
-    AGENTS.md (loaded by Bub's system_prompt hook), so this layer only adds
-    Feishu-specific behavioural guidance.
-    """
-    return (
-        "<general_instruct>\n"
-        "Call tools or skills to finish the task.\n"
-        "</general_instruct>\n"
-        "<response_instruct>\n"
-        "Before ending this run, you MUST determine whether a response needs to be sent via channel.\n"
-        "When responding to a channel message, identify the channel from the message metadata (e.g., $feishu).\n"
-        "Send your message as instructed by the channel skill (e.g., feishu-send skill for $feishu).\n"
-        "</response_instruct>\n"
-        "<available_tools>\n"
-        "- bash: Run a shell command.\n"
-        "- fs_read / fs_write / fs_edit: File operations.\n"
-        "- skill: Load a skill by name.\n"
-        "- tape_info / tape_search / tape_handoff: Tape management.\n"
-        "- web_fetch: Fetch web content.\n"
-        "- subagent: Spawn a sub-agent.\n"
-        "</available_tools>\n"
-        "<available_skills>\n"
-        "- feishu-send: Send messages, cards, images, reactions to Feishu.\n"
-        "- feishu-ws-receiver: Receive Feishu messages (this is the receiver side).\n"
-        "</available_skills>\n"
-        "逗号命令：你可以用 ,xxx 的形式直接调用工具/技能，例如：\n"
-        "- ,help — 查看可用命令\n"
-        "- ,tape_info — 查看当前会话状态\n"
-        "- ,bash <命令> — 执行 shell 命令\n"
-        "如果是逗号命令，直接执行并回复结果；否则正常聊天。\n"
-    )
+def build_prompt(event: dict) -> tuple[str, bytes | None]:
+    """Build a minimal Feishu prompt, aligned with the Telegram pattern.
 
-
-def build_context_layer(event: dict) -> str:
-    """Layer 2: Context Layer — conversation metadata, sender info, channel state.
-
-    This layer carries the *who, where, when* of the event.  It is stable
-    across multiple events in the same session, but may change between
-    sessions.  Keeping it separate from the raw event makes prompt caching
-    more effective.
+    All system-level instructions (tools, skills, persona, SOUL.md) are
+    injected by Bub's own hooks.  The bridge only needs to carry channel
+    metadata and the raw event payload.
     """
     chat_id = event.get("chat_id", "")
-    chat_type = event.get("chat_type", "")
     sender_id = event.get("sender_id", "")
-    session_id = f"feishu:{chat_id}" if chat_id else "feishu:default"
-
-    return (
-        f"<channel>$feishu</channel>\n"
-        f"<chat_id>{chat_id}</chat_id>\n"
-        f"<chat_type>{chat_type}</chat_type>\n"
-        f"<sender_id>{sender_id}</sender_id>\n"
-        f"<session_id>{session_id}</session_id>\n"
-        f"<event_time>{event.get('create_time', '')}</event_time>\n"
-        "<context_contract>\n"
-        "Excessively long context may cause model call failures. "
-        "Use tape.info to check token usage and tape.handoff to shorten history.\n"
-        "</context_contract>\n"
-    )
-
-
-def build_event_layer(event: dict) -> str:
-    """Layer 3: Event Layer — the actual message payload.
-
-    This layer contains the *what* that changed: the message content,
-    attachments, and any media that needs to be processed.
-    """
-    msg_type = event.get("message_type", "")
     message_id = event.get("message_id", "")
+    msg_type = event.get("message_type", "")
     media_data = None
 
     # Try to download media if present
@@ -332,48 +296,24 @@ def build_event_layer(event: dict) -> str:
 
     event_json = json.dumps(event, ensure_ascii=False, indent=2)
 
-    layer = f"<event_type>im.message.receive_v1</event_type>\n"
-    layer += f"<message_id>{message_id}</message_id>\n"
-    layer += f"<message_type>{msg_type}</message_type>\n"
-
-    if msg_type in ("image", "file", "audio"):
-        layer += (
-            f"<note>This message contains a {msg_type} attachment. "
-            "The raw content shows the file/image key only. "
-            "You cannot directly view the attachment content.</note>\n"
-        )
-
-    layer += (
-        "<event_payload>\n"
-        f"```json\n{event_json}\n```\n"
-        "</event_payload>\n"
-    )
-
-    return layer, media_data
-
-
-def build_prompt(event: dict) -> tuple[str, bytes | None]:
-    """Build the Feishu wake-up prompt as three layers.
-
-    Returns (prompt_string, media_data_or_None).
-    """
-    system_layer = build_system_layer()
-    context_layer = build_context_layer(event)
-    event_layer, media_data = build_event_layer(event)
-
     prompt = (
-        "<system_prompt>\n"
-        f"{system_layer}"
-        "</system_prompt>\n\n"
-        "<context>\n"
-        f"{context_layer}"
-        "</context>\n\n"
-        "<event>\n"
-        f"{event_layer}"
-        "</event>\n"
+        "你是喵喵，被一条飞书消息吵醒了。\n\n"
+        "事情是这样的：\n"
+        "- 普通文字只会进日志，不会发到飞书。\n"
+        "- 如果你决定回消息，记得用 $feishu skill。\n"
+        f"- 优先回复 message_id={message_id}，在 chat_id={chat_id}。\n"
+        "- BUB_LARK_APP_ID / BUB_LARK_APP_SECRET 已经在环境变量里了。\n"
+        "- 不要跑交互式设置命令。如果缺凭证，就在飞书里问用户要。\n"
+        "- 不是所有消息都需要回，自己判断。\n\n"
+        f"sender_id={sender_id}|channel=$feishu|chat_id={chat_id}\n"
+        f"---Date: {event.get('create_time', '')}---\n"
+        f"Feishu update JSON:\n```json\n{event_json}\n```"
     )
 
     return prompt, media_data
+
+
+
 
 
 def send_feishu_error(chat_id: str, message: str) -> None:
@@ -414,6 +354,7 @@ def run_bub_for_event(event: dict) -> bool:
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
+                sync_tape_db("pull")
                 result = subprocess.run(
                     [
                         BUB_BIN, "run",
@@ -427,6 +368,7 @@ def run_bub_for_event(event: dict) -> bool:
                     env=bub_run_env(),
                     text=True,
                 )
+                sync_tape_db("push")
                 log.write(f"exit_code={result.returncode} attempt={attempt}\n")
                 if result.returncode != 0:
                     log.write(f"stderr={result.stderr[:500]}\n")

@@ -5,7 +5,8 @@ set -Eeuo pipefail
 BUB_BIN="${BUB_BIN:-/app/.venv/bin/bub}"
 PYTHON_BIN="${PYTHON_BIN:-/app/.venv/bin/python}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
-export BUB_CONFIG="${BUB_CONFIG:-${WORKSPACE_DIR}/config.yml}"
+BUB_DATA_DIR="${BUB_HOME:-${HOME}/.bub}"
+export BUB_CONFIG="${BUB_CONFIG:-${BUB_DATA_DIR}/config.yml}"
 if [[ -z "${BUB_RUNTIME_SRC:-}" ]]; then
   if [[ -d "${WORKSPACE_DIR}/src/bub" ]]; then
     BUB_RUNTIME_SRC="${WORKSPACE_DIR}/src"
@@ -14,17 +15,17 @@ if [[ -z "${BUB_RUNTIME_SRC:-}" ]]; then
   fi
 fi
 export BUB_RUNTIME_SRC
-STATE_DIR="${BUB_HOME:-/data}/telegram-native"
-FEISHU_STATE_DIR="${BUB_HOME:-/data}/feishu-native"
+STATE_DIR="${BUB_DATA_DIR}/telegram-native"
+FEISHU_STATE_DIR="${BUB_DATA_DIR}/feishu-native"
 OFFSET_FILE="${STATE_DIR}/offset"
 RUN_LOG="${STATE_DIR}/runs.log"
 FEISHU_RUN_LOG="${FEISHU_STATE_DIR}/runs.log"
 OPENCLI_DAEMON_PORT="${OPENCLI_DAEMON_PORT:-19825}"
 OPENCLI_HOST_DAEMON_HOST="${OPENCLI_HOST_DAEMON_HOST:-host.docker.internal}"
 OPENCLI_HOST_DAEMON_PORT="${OPENCLI_HOST_DAEMON_PORT:-${OPENCLI_DAEMON_PORT}}"
-OPENCLI_FORWARD_LOG="${BUB_HOME:-/data}/opencli-forwarder.log"
+OPENCLI_FORWARD_LOG="${BUB_DATA_DIR}/opencli-forwarder.log"
 
-mkdir -p "${STATE_DIR}"
+mkdir -p "${STATE_DIR}" "${FEISHU_STATE_DIR}"
 cd "${WORKSPACE_DIR}"
 if [[ -d "${BUB_RUNTIME_SRC}/bub" ]]; then
   export PYTHONPATH="${BUB_RUNTIME_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -59,13 +60,45 @@ if lark.get("brand"):
     exports["BUB_LARK_BRAND"] = str(lark["brand"])
 # Nowledge Mem config
 nmem = data.get("nmem") or {}
-if nmem.get("api_url"):
+if nmem.get("api_url") and not os.environ.get("NMEM_API_URL"):
     exports["NMEM_API_URL"] = str(nmem["api_url"])
+
+tape_sync = data.get("tape_sync") or {}
+if tape_sync.get("provider"):
+    exports["BUB_TAPE_SYNC_PROVIDER"] = str(tape_sync["provider"])
+if tape_sync.get("bucket"):
+    exports["BUB_TAPE_SYNC_BUCKET"] = str(tape_sync["bucket"])
+if tape_sync.get("endpoint"):
+    exports["BUB_TAPE_SYNC_ENDPOINT"] = str(tape_sync["endpoint"])
+if tape_sync.get("region"):
+    exports["BUB_TAPE_SYNC_REGION"] = str(tape_sync["region"])
+if tape_sync.get("access_key_id"):
+    exports["BUB_TAPE_SYNC_ACCESS_KEY_ID"] = str(tape_sync["access_key_id"])
+if tape_sync.get("secret_access_key"):
+    exports["BUB_TAPE_SYNC_SECRET_ACCESS_KEY"] = str(tape_sync["secret_access_key"])
+if tape_sync.get("root"):
+    exports["BUB_TAPE_SYNC_ROOT"] = str(tape_sync["root"])
+if tape_sync.get("key"):
+    exports["BUB_TAPE_SYNC_KEY"] = str(tape_sync["key"])
+if tape_sync.get("local_path"):
+    exports["BUB_TAPE_SYNC_LOCAL_PATH"] = str(tape_sync["local_path"])
 
 for key, value in exports.items():
     print(f"export {key}={shlex.quote(value)}")
 PY
   )"
+}
+
+sync_tape_db() {
+  local direction="$1"
+  if [[ -z "${BUB_TAPE_SYNC_BUCKET:-}" || -z "${BUB_TAPE_SYNC_ENDPOINT:-}" ]]; then
+    return 0
+  fi
+  if "${PYTHON_BIN}" -m bub.tape_sync "${direction}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "$(date -Is) startup.sh: tape sync ${direction} failed; continuing" >&2
+  return 0
 }
 
 bub_run_env() {
@@ -169,6 +202,7 @@ init_offset() {
 run_bub_for_update() {
   local update_json="$1"
   local message_json chat_id message_id sender_id session_id prompt
+  local rc=0
 
   message_json="$(jq -c '.message // empty' <<< "${update_json}")"
   [[ -z "${message_json}" ]] && return 0
@@ -198,19 +232,26 @@ run_bub_for_update() {
 ')"
 
 
+  sync_tape_db pull
   {
     printf '\n[%s] update_id=%s chat_id=%s message_id=%s\n' \
       "$(date -Is)" \
       "$(jq -r '.update_id' <<< "${update_json}")" \
       "${chat_id}" \
       "${message_id}"
-    bub_run_env "${BUB_BIN}" run \
+    if bub_run_env "${BUB_BIN}" run \
       --channel telegram \
       --chat-id "${chat_id}" \
       --sender-id "${sender_id}" \
       --session-id "${session_id}" \
-      "${prompt}"
+      "${prompt}"; then
+      rc=0
+    else
+      rc=$?
+    fi
   } >> "${RUN_LOG}" 2>&1
+  sync_tape_db push
+  return "${rc}"
 }
 
 run_feishu_loop() {

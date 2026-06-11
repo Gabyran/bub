@@ -63,7 +63,7 @@ class Agent:
             tape_store = InMemoryTapeStore()
         tape_store = ForkTapeStore(tape_store)
         llm = _build_llm(self.settings, tape_store, self.framework.build_tape_context())
-        return TapeService(llm, bub.home / "tapes", tape_store)
+        return TapeService(llm, bub.home / "tapes", tape_store, shared_scope=self.settings.tape_scope)
 
     @staticmethod
     def _events_from_iterable(iterable: Iterable) -> AsyncStreamEvents:

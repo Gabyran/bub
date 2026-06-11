@@ -60,8 +60,10 @@ RUN uv sync --no-dev --no-editable && \
     chmod +x /app/entrypoint.sh
 
 WORKDIR /workspace
+COPY startup.sh ./startup.sh
+COPY bub-project ./bub-project
 
-VOLUME /root/.bub
+VOLUME /data
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 

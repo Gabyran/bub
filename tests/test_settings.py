@@ -38,6 +38,7 @@ def test_settings_no_keys_return_none() -> None:
     assert settings.api_key is None
     assert settings.api_base is None
     assert settings.client_args is None
+    assert settings.tape_scope is None
 
 
 def test_settings_provider_names_are_lowercased() -> None:
@@ -45,6 +46,12 @@ def test_settings_provider_names_are_lowercased() -> None:
 
     assert isinstance(settings.api_key, dict)
     assert "openrouter" in settings.api_key
+
+
+def test_settings_tape_scope_from_env() -> None:
+    settings = _settings_with_env({"BUB_TAPE_SCOPE": "shared-project"})
+
+    assert settings.tape_scope == "shared-project"
 
 
 def test_settings_mixed_single_key_with_per_provider_base() -> None:

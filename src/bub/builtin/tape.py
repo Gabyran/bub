@@ -34,10 +34,11 @@ class AnchorSummary:
 
 
 class TapeService:
-    def __init__(self, llm: LLM, archive_path: Path, store: ForkTapeStore) -> None:
+    def __init__(self, llm: LLM, archive_path: Path, store: ForkTapeStore, *, shared_scope: str | None = None) -> None:
         self._llm = llm
         self._archive_path = archive_path
         self._store = store
+        self._shared_scope = shared_scope
 
     async def info(self, tape_name: str) -> TapeInfo:
         tape = self._llm.tape(tape_name)
@@ -118,10 +119,11 @@ class TapeService:
         await tape.append_async(TapeEntry.event(name=name, data=payload, **meta))
 
     def session_tape(self, session_id: str, workspace: Path) -> Tape:
-        workspace_hash = hashlib.md5(str(workspace.resolve()).encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
-        tape_name = (
-            workspace_hash + "__" + hashlib.md5(session_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
-        )
+        # Shared scope lets local and server runs land on the same tape name.
+        tape_scope = self._shared_scope or str(workspace.resolve())
+        scope_hash = hashlib.md5(tape_scope.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        session_hash = hashlib.md5(session_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        tape_name = scope_hash + "__" + session_hash
         return self._llm.tape(tape_name)
 
     @contextlib.asynccontextmanager

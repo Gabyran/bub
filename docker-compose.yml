@@ -8,15 +8,18 @@ services:
       - .env
     environment:
       BUB_HOME: /data
+      BUB_PROJECT: /workspace/bub-project
       BUB_CONFIG: /data/config.yml
       HTTP_PROXY: ${BUB_HTTP_PROXY:-}
       HTTPS_PROXY: ${BUB_HTTPS_PROXY:-}
       ALL_PROXY: ${BUB_ALL_PROXY:-}
-      NO_PROXY: ${BUB_NO_PROXY:-localhost,127.0.0.1,::1}
+      NO_PROXY: ${BUB_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal}
     volumes:
       - ${BUB_WORKSPACE_PATH:-.}:/workspace
       - ${BUB_HOME_HOST:-${HOME}/.bub}:/data
       - ${BUB_AGENT_HOME:-${HOME}/.agents}:/root/.agents
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
     restart: unless-stopped

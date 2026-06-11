@@ -1,0 +1,2 @@
+nmem-cli
+nowledge-mem-bub

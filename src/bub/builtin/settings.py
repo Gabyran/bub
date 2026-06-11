@@ -46,6 +46,7 @@ class AgentSettings(Settings):
     model_timeout_seconds: int | None = None
     client_args: dict[str, Any] | None = None
     verbose: int = Field(default=0, description="Verbosity level for logging. Higher means more verbose.", ge=0, le=2)
+    tape_scope: str | None = None
 
     @property
     def home(self) -> pathlib.Path:
