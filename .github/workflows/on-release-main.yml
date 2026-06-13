@@ -27,6 +27,12 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+      url: https://pypi.org/project/bub
     steps:
       - name: Check out
         uses: actions/checkout@v6
@@ -40,6 +46,4 @@ jobs:
         run: uv build
 
       - name: Publish package
-        run: uv publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish --trusted-publishing always
