@@ -17,6 +17,11 @@ Host github.com
     StrictHostKeyChecking no
 SSHEOF
 chmod 600 /root/.ssh/config
+# Restore gh CLI config from data volume
+if [[ -d /data/gh-config/gh ]]; then
+  mkdir -p /root/.config
+  cp -r /data/gh-config/gh /root/.config/gh
+fi
 DEFAULT_HOME="${HOME}/.bub"
 if [[ "${BUB_DATA_DIR}" != "${DEFAULT_HOME}" && -f "${BUB_CONFIG}" ]]; then
   mkdir -p "${DEFAULT_HOME}"
