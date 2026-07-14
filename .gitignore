@@ -174,3 +174,4 @@ reference/
 backup/
 _version.py
 !website/src/lib/
+bub-contrib/
