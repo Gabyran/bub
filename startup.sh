@@ -8,6 +8,15 @@ WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 BUB_DATA_DIR="${BUB_HOME:-${HOME}/.bub}"
 export BUB_CONFIG="${BUB_CONFIG:-${BUB_DATA_DIR}/config.yml}"
 # Symlink config for framework default path (upstream removed BUB_HOME support)
+# SSH proxy for github.com via mihomo
+mkdir -p /root/.ssh
+cat > /root/.ssh/config << SSHEOF
+Host github.com
+    HostName github.com
+    ProxyCommand socat - PROXY:172.17.0.1:%h:%p,proxyport=7890
+    StrictHostKeyChecking no
+SSHEOF
+chmod 600 /root/.ssh/config
 DEFAULT_HOME="${HOME}/.bub"
 if [[ "${BUB_DATA_DIR}" != "${DEFAULT_HOME}" && -f "${BUB_CONFIG}" ]]; then
   mkdir -p "${DEFAULT_HOME}"
