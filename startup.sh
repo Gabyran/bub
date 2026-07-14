@@ -7,6 +7,12 @@ PYTHON_BIN="${PYTHON_BIN:-/app/.venv/bin/python}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 BUB_DATA_DIR="${BUB_HOME:-${HOME}/.bub}"
 export BUB_CONFIG="${BUB_CONFIG:-${BUB_DATA_DIR}/config.yml}"
+# Symlink config for framework default path (upstream removed BUB_HOME support)
+DEFAULT_HOME="${HOME}/.bub"
+if [[ "${BUB_DATA_DIR}" != "${DEFAULT_HOME}" && -f "${BUB_CONFIG}" ]]; then
+  mkdir -p "${DEFAULT_HOME}"
+  ln -sf "${BUB_CONFIG}" "${DEFAULT_HOME}/config.yml"
+fi
 if [[ -z "${BUB_RUNTIME_SRC:-}" ]]; then
   if [[ -d "${WORKSPACE_DIR}/src/bub" ]]; then
     BUB_RUNTIME_SRC="${WORKSPACE_DIR}/src"

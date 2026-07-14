@@ -224,6 +224,7 @@ source = { editable = "../" }
 dependencies = [
     { name = "aiohttp" },
     { name = "any-llm-sdk" },
+    { name = "authlib" },
     { name = "httpx", extra = ["socks"] },
     { name = "inquirer-textual" },
     { name = "loguru" },
@@ -235,15 +236,16 @@ dependencies = [
     { name = "python-telegram-bot" },
     { name = "pyyaml" },
     { name = "rapidfuzz" },
-    { name = "republic" },
     { name = "rich" },
     { name = "typer" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "any-llm-sdk", extras = ["anthropic"] },
+    { name = "authlib", specifier = ">=1.7.2" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inquirer-textual", specifier = ">=0.5.1" },
     { name = "logfire", marker = "extra == 'logfire'", specifier = ">=4.31.0" },
@@ -256,9 +258,9 @@ requires-dist = [
     { name = "python-telegram-bot", specifier = ">=21.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "rapidfuzz", specifier = ">=3.14.3" },
-    { name = "republic", specifier = ">=0.5.4" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.9.0" },
+    { name = "typing-extensions", specifier = ">=4.13.0" },
 ]
 provides-extras = ["logfire"]
 
@@ -1339,21 +1341,6 @@ wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/bb/ce/ff942d19fce5385054650bb71a58495ddda299d94661ccc4e6e7fa44868b/rapidfuzz-3.14.5-cp314-cp314t-win32.whl", hash = "sha256:0f23e37019ec07712d58976b1ab2b889f8649a7f7c2f626a2f34ea9139e79279", size = 1803950, upload-time = "2026-04-07T11:16:10.873Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/5c/0f/9aafc63f9661222b819b391c187eed29fc90ad5935f9690e5ecc2d2047a4/rapidfuzz-3.14.5-cp314-cp314t-win_amd64.whl", hash = "sha256:7d5ca9c7832e6879a707296d1463685f7c243a27846227044504741640caec66", size = 1632357, upload-time = "2026-04-07T11:16:13.1Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/70/a6/51fc1b0e61e3326e1c68a61cfd0c6b3c34c843681c4b1eefbf0596f59162/rapidfuzz-3.14.5-cp314-cp314t-win_arm64.whl", hash = "sha256:3e91dcd2549b8f8d843f98ba03a17e01f3d8b72ce942adbbb6761bc58ffce813", size = 855409, upload-time = "2026-04-07T11:16:15.787Z" },
-]
-
-[[package]]
-name = "republic"
-version = "0.5.8"
-source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
-dependencies = [
-    { name = "any-llm-sdk" },
-    { name = "authlib" },
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e9/71/4766e21bd9aff9edc806556c92f208bc14aa7d708f8f4d3941bc5ebe6115/republic-0.5.8.tar.gz", hash = "sha256:4b8a3cad45080557c7d34b49cfd2d5d24d01aaba35d27ac19a3bf510674b77e5", size = 157246, upload-time = "2026-05-10T14:54:40.281Z" }
-wheels = [
-    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/b4/9c/c453a54b8678e5cd6d6db3d8730a4fad86e7cc558d0d9cd6b046ee61013b/republic-0.5.8-py3-none-any.whl", hash = "sha256:e323881df8239fb23b4cce3f7323aee88dae257fa4a47e625090d711545919a0", size = 62805, upload-time = "2026-05-10T14:54:38.895Z" },
 ]
 
 [[package]]

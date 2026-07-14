@@ -5,8 +5,8 @@ import threading
 from collections.abc import Iterable
 from dataclasses import replace
 
-from republic import TapeEntry, TapeQuery
-from republic.tape import InMemoryQueryMixin
+from bub.tape import TapeEntry, TapeQuery
+from bub.tape import InMemoryQueryMixin
 from sqlalchemy import Engine, Text, cast, create_engine, event, func, inspect, select, update
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError, IntegrityError
