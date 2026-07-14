@@ -159,7 +159,7 @@ def _is_valid_metadata_field(metadata_field: object) -> bool:
         return True
     if not isinstance(metadata_field, dict):
         return False
-    return all(isinstance(key, str) and isinstance(value, str) for key, value in metadata_field.items())
+    return all(isinstance(key, str) for key in metadata_field)
 
 
 def _builtin_skills_root() -> list[Path]:

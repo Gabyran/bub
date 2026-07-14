@@ -54,6 +54,9 @@ When responding to a channel message, you MUST:
 <context_contract>
 Excessively long context may cause model call failures. In this case, you MAY use tape.info to retrieve the token usage and you SHOULD use tape.handoff tool to shorten the retrieved history.
 </context_contract>
+<context_management>
+You have full control over your context window. Use tape.info to stay aware of conversation length. Use tape.handoff to consolidate context when appropriate. Use tape.search to recall earlier history when needed.
+</context_management>
 """
 
 

@@ -102,7 +102,7 @@ telegram:
 def test_read_skill_rejects_invalid_metadata_field_type(tmp_path: Path) -> None:
     skill_dir = tmp_path / "bad-skill"
     skill_dir.mkdir()
-    content = "---\nname: bad-skill\ndescription: bad\nmetadata:\n  retries: 3\n---\nBody\n"
+    content = "---\nname: bad-skill\ndescription: bad\nmetadata: 42\n---\nBody\n"
     (skill_dir / SKILL_FILE_NAME).write_text(content, encoding="utf-8")
 
     assert _read_skill(skill_dir, source="project") is None
