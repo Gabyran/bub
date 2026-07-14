@@ -175,3 +175,6 @@ backup/
 _version.py
 !website/src/lib/
 bub-contrib/
+
+# Project-level skills (runtime, user-specific)
+.agents/
