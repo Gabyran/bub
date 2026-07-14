@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncGenerator
-from typing import Any, cast
+from typing import Any
 
 import pluggy
 from loguru import logger
-from republic import AsyncStreamEvents, StreamEvent, StreamState
 
+from bub.runtime import (
+    AsyncStreamEvents,
+    LlmCallDecision,
+    LlmCallRequest,
+    LlmCallResult,
+    StreamEvent,
+    StreamState,
+    ToolCall,
+    ToolCallDecision,
+    ToolCallResult,
+)
 from bub.types import Envelope
 
 
@@ -165,7 +175,9 @@ class HookRuntime:
         for _, plugin in reversed(self._plugin_manager.list_name_plugin()):
             if hasattr(plugin, "run_model"):
                 output = await self.call_first("run_model", prompt=prompt, session_id=session_id, state=state)
-                return cast(str, output)
+                if output is None or isinstance(output, str):
+                    return output
+                raise TypeError("hook.run_model must return str or None")
             elif hasattr(plugin, "run_model_stream"):
                 stream = await self.call_first("run_model_stream", prompt=prompt, session_id=session_id, state=state)
                 text = ""
@@ -181,7 +193,10 @@ class HookRuntime:
         """Run the first `run_model_stream` hook found and fallback to `run_model` hook."""
         for _, plugin in reversed(self._plugin_manager.list_name_plugin()):
             if hasattr(plugin, "run_model_stream"):
-                return await self.call_first("run_model_stream", prompt=prompt, session_id=session_id, state=state)
+                stream = await self.call_first("run_model_stream", prompt=prompt, session_id=session_id, state=state)
+                if stream is None or isinstance(stream, AsyncStreamEvents):
+                    return stream
+                raise TypeError("hook.run_model_stream must return AsyncStreamEvents or None")
             elif hasattr(plugin, "run_model"):
 
                 async def iterator() -> AsyncGenerator[StreamEvent, None]:
@@ -190,6 +205,110 @@ class HookRuntime:
 
                 return AsyncStreamEvents(iterator(), state=StreamState())
         return None
+
+
+class AgentHooks:
+    """Narrow facade for agent-loop interception hooks (issue #253).
+
+    Unlike ``call_first``/``call_many``, every implementation call here is
+    fault-isolated: a raising plugin is logged and skipped, never fatal to
+    the turn. Blocking a tool call is only possible through a returned
+    :class:`~bub.runtime.ToolCallDecision` (``deny``/``replace``) — an
+    exception inside ``before_tool_call`` is treated as a broken plugin,
+    not as a veto.
+    """
+
+    def __init__(self, runtime: HookRuntime) -> None:
+        self._runtime = runtime
+
+    async def before_llm_call(
+        self, request: LlmCallRequest, state: dict[str, Any]
+    ) -> tuple[LlmCallRequest, LlmCallDecision | None]:
+        """Chain ``before_llm_call`` impls; each sees the previous impl's request.
+
+        The first ``LlmCallDecision`` (``finish``) short-circuits remaining
+        implementations and the provider call itself.
+        """
+
+        for impl in self._runtime._iter_hookimpls("before_llm_call"):
+            value = await self._safe_call_one("before_llm_call", impl, {"request": request, "state": state})
+            if value is None or value is _SKIP_VALUE:
+                continue
+            if isinstance(value, LlmCallRequest):
+                request = value
+            elif isinstance(value, LlmCallDecision):
+                return request, value
+            else:
+                self._warn_bad_return(
+                    "before_llm_call", impl, value, expected="LlmCallRequest | LlmCallDecision | None"
+                )
+        return request, None
+
+    async def after_llm_call(self, request: LlmCallRequest, result: LlmCallResult, state: dict[str, Any]) -> None:
+        """Observe-only; return values are ignored."""
+
+        await self._safe_calls("after_llm_call", lambda: {"request": request, "result": result, "state": state})
+
+    async def before_tool_call(self, call: ToolCall, state: dict[str, Any]) -> tuple[ToolCall, ToolCallDecision]:
+        """Chain ``before_tool_call`` impls.
+
+        ``proceed`` decisions fold argument changes into the call visible to
+        later impls; the first ``replace``/``deny`` decision short-circuits.
+        """
+
+        from dataclasses import replace as dc_replace
+
+        for impl in self._runtime._iter_hookimpls("before_tool_call"):
+            value = await self._safe_call_one("before_tool_call", impl, {"call": call, "state": state})
+            if value is None or value is _SKIP_VALUE:
+                continue
+            if not isinstance(value, ToolCallDecision):
+                self._warn_bad_return("before_tool_call", impl, value, expected="ToolCallDecision | None")
+                continue
+            if value.action == "proceed":
+                if value.arguments is not None:
+                    call = dc_replace(call, arguments=dict(value.arguments))
+                continue
+            return call, value
+        return call, ToolCallDecision.proceed()
+
+    async def after_tool_call(self, call: ToolCall, result: ToolCallResult, state: dict[str, Any]) -> None:
+        """Observe-only; return values are ignored."""
+
+        await self._safe_calls("after_tool_call", lambda: {"call": call, "state": state, "result": result})
+
+    async def _safe_calls(self, hook_name: str, kwargs_factory: Any) -> list[tuple[Any, Any]]:
+        outcomes: list[tuple[Any, Any]] = []
+        for impl in self._runtime._iter_hookimpls(hook_name):
+            value = await self._safe_call_one(hook_name, impl, kwargs_factory())
+            if value is _SKIP_VALUE:
+                continue
+            outcomes.append((impl, value))
+        return outcomes
+
+    async def _safe_call_one(self, hook_name: str, impl: Any, kwargs: dict[str, Any]) -> Any:
+        call_kwargs = self._runtime._kwargs_for_impl(impl, kwargs)
+        try:
+            return await self._runtime._invoke_impl_async(
+                hook_name=hook_name, impl=impl, call_kwargs=call_kwargs, kwargs=kwargs
+            )
+        except Exception:
+            logger.opt(exception=True).warning(
+                "hook.agent_hook_failed hook={} adapter={}",
+                hook_name,
+                impl.plugin_name or "<unknown>",
+            )
+            return _SKIP_VALUE
+
+    @staticmethod
+    def _warn_bad_return(hook_name: str, impl: Any, value: Any, *, expected: str) -> None:
+        logger.warning(
+            "hook.agent_hook_bad_return hook={} adapter={} got={} expected={}",
+            hook_name,
+            impl.plugin_name or "<unknown>",
+            type(value).__name__,
+            expected,
+        )
 
 
 _SKIP_VALUE = object()

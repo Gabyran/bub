@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import pytest
-from republic import TapeEntry
 
 from bub.builtin.store import FileTapeStore, ForkTapeStore
+from bub.tape import AsyncTapeStoreAdapter, TapeEntry
 
 
 @pytest.mark.asyncio
 async def test_file_tape_store_assigns_monotonic_ids_when_merging_forked_entries(tmp_path) -> None:
     parent = FileTapeStore(directory=tmp_path)
-    store = ForkTapeStore(parent)
+    store = ForkTapeStore(AsyncTapeStoreAdapter(parent), "tape")
 
-    async with store.fork("tape", merge_back=True):
-        await store.append("tape", TapeEntry.event(name="first", data={"n": 1}))
+    await store.append("tape", TapeEntry.event(name="first", data={"n": 1}))
+    await store.merge_back()
 
-    async with store.fork("tape", merge_back=True):
-        await store.append("tape", TapeEntry.event(name="second", data={"n": 2}))
+    store = ForkTapeStore(AsyncTapeStoreAdapter(parent), "tape")
+    await store.append("tape", TapeEntry.event(name="second", data={"n": 2}))
+    await store.merge_back()
 
     entries = parent.read("tape") or []
     assert [entry.id for entry in entries] == [1, 2]

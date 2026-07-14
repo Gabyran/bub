@@ -3,24 +3,117 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
+from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel, Field
-from republic import AsyncTapeStore, TapeQuery, ToolContext
 
 from bub.builtin.shell_manager import shell_manager
 from bub.skills import discover_skills
-from bub.tools import resolve_tool_names, tool
+from bub.tools import REGISTRY, Tool, ToolContext, tool
 
 if TYPE_CHECKING:
     from bub.builtin.agent import Agent
 
-type EntryKind = Literal["event", "anchor", "system", "message", "tool_call", "tool_result"]
-
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_HEADERS = {"accept": "text/markdown"}
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
+
+
+def _to_model_name(name: str) -> str:
+    return name.replace(".", "_")
+
+
+def _tool_name_index() -> dict[str, str]:
+    real_names = {tool_name.casefold(): tool_name for tool_name in REGISTRY}
+    alias_names = {_to_model_name(tool_name).casefold(): tool_name for tool_name in REGISTRY}
+    return {**alias_names, **real_names}
+
+
+def resolve_tool_name(name: str) -> str | None:
+    """Resolve a user/model-provided tool name to the runtime registry name."""
+    key = name.strip().casefold()
+    if not key:
+        return None
+    return _tool_name_index().get(key)
+
+
+def _resolve_explicit_tool_names(names: Iterable[str]) -> tuple[set[str], set[str]]:
+    resolved: set[str] = set()
+    unknown: set[str] = set()
+    for name in names:
+        normalized_name = name.strip()
+        if resolved_name := resolve_tool_name(normalized_name):
+            resolved.add(resolved_name)
+        else:
+            unknown.add(normalized_name)
+    return resolved, unknown
+
+
+def _raise_unknown_tool_names(names: set[str]) -> None:
+    formatted = ", ".join(sorted(repr(name) for name in names))
+    raise ValueError(f"unknown tool name(s): {formatted}")
+
+
+def resolve_tool_names(names: Iterable[str] | None = None, *, exclude: Iterable[str] = ()) -> set[str]:
+    """Resolve tool names from either runtime names or model-facing aliases."""
+    excluded, unknown_excluded = _resolve_explicit_tool_names(exclude)
+    if unknown_excluded:
+        _raise_unknown_tool_names(unknown_excluded)
+    if names is None:
+        return set(REGISTRY) - excluded
+
+    resolved, unknown = _resolve_explicit_tool_names(names)
+    if unknown:
+        _raise_unknown_tool_names(unknown)
+    return resolved - excluded
+
+
+def model_tools(tools: Iterable[Tool]) -> list[Tool]:
+    """Convert runtime tool names into model-safe aliases."""
+    return [replace(tool_item, name=_to_model_name(tool_item.name)) for tool_item in tools]
+
+
+def _tool_signature(tool_item: Tool) -> str:
+    properties = tool_item.parameters.get("properties", {})
+    if not isinstance(properties, dict) or not properties:
+        return f"{_to_model_name(tool_item.name)}()"
+
+    required = tool_item.parameters.get("required", [])
+    required_names = set(required) if isinstance(required, list) else set()
+    params = [name if name in required_names else f"{name}?" for name in properties]
+    return f"{_to_model_name(tool_item.name)}({', '.join(params)})"
+
+
+def render_tools_prompt(tools: Iterable[Tool]) -> str:
+    """Render a human-readable description of tools for builtin agent prompts."""
+    if not tools:
+        return ""
+    lines = []
+    for tool_item in tools:
+        line = f"- {_tool_signature(tool_item)}"
+        if tool_item.description:
+            line += f": {tool_item.description}"
+        lines.append(line)
+    return f"<available_tools>\n{'\n'.join(lines)}\n</available_tools>"
+
+
+def completion_tools(tools: Iterable[Tool]) -> list[ChatCompletionToolParam]:
+    """Build any-llm completion tool payloads from Bub tools."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool_item.name,
+                "description": tool_item.description,
+                "parameters": tool_item.parameters,
+            },
+        }
+        for tool_item in tools
+    ]
 
 
 def _raise_for_failed_shell(returncode: int | None, output: str) -> None:
@@ -44,7 +137,7 @@ class SearchInput(BaseModel):
     end: str | None = Field(None, description="Optional end date to filter entries (ISO format).")
     kinds: list[str] = Field(
         default=["message", "tool_result"],
-        description="Optional list of entry kinds to filter search results. Can include 'event', 'anchor', 'system', 'message', 'tool_call', 'tool_result'.",
+        description="Optional list of entry kinds to filter search results. Can include 'event', 'anchor', 'system', 'message', 'tool_call', 'tool_result', 'error'.",
     )
 
 
@@ -179,8 +272,7 @@ def skill_describe(name: str, *, context: ToolContext) -> str:
 @tool(context=True, name="tape.info")
 async def tape_info(context: ToolContext) -> str:
     """Get information about the current tape, such as number of entries and anchors."""
-    agent = _get_agent(context)
-    info = await agent.tapes.info(context.tape or "")
+    info = await context.tape.info()
     return (
         f"name: {info.name}\n"
         f"entries: {info.entries}\n"
@@ -194,17 +286,11 @@ async def tape_info(context: ToolContext) -> str:
 @tool(context=True, name="tape.search", model=SearchInput)
 async def tape_search(param: SearchInput, *, context: ToolContext) -> str:
     """Search for entries in the current tape that match the query. Returns a list of matching entries."""
-    agent = _get_agent(context)
-    query = (
-        TapeQuery[AsyncTapeStore](tape=context.tape or "", store=agent.tapes._store)
-        .query(param.query)
-        .kinds(*param.kinds)
-        .limit(param.limit)
-    )
+    query = context.tape.query().query(param.query).kinds(*param.kinds).limit(param.limit)
     if param.start or param.end:
         query = query.between_dates(param.start or "", param.end or "")
 
-    entries = await agent.tapes.search(query)
+    entries = await context.tape.search(query)
     lines: list[str] = []
     for entry in entries:
         entry_str = json.dumps({"date": entry.date, "content": entry.payload})
@@ -219,24 +305,21 @@ async def tape_search(param: SearchInput, *, context: ToolContext) -> str:
 @tool(context=True, name="tape.reset")
 async def tape_reset(archive: bool = False, *, context: ToolContext) -> str:
     """Reset the current tape, optionally archiving it."""
-    agent = _get_agent(context)
-    result = await agent.tapes.reset(context.tape or "", archive=archive)
+    result = await context.tape.reset(archive=archive)
     return result
 
 
 @tool(context=True, name="tape.handoff")
 async def tape_handoff(name: str = "handoff", summary: str = "", *, context: ToolContext) -> str:
     """Add a handoff anchor to the current tape."""
-    agent = _get_agent(context)
-    await agent.tapes.handoff(context.tape or "", name=name, state={"summary": summary})
+    await context.tape.handoff(name=name, state={"summary": summary})
     return f"anchor added: {name}"
 
 
 @tool(context=True, name="tape.anchors")
 async def tape_anchors(*, context: ToolContext) -> str:
     """List anchors in the current tape."""
-    agent = _get_agent(context)
-    anchors = await agent.tapes.anchors(context.tape or "")
+    anchors = await context.tape.anchors()
     if not anchors:
         return "(no anchors)"
     return "\n".join(f"- {anchor.name}" for anchor in anchors)
@@ -318,6 +401,22 @@ async def quit_tool(*, context: ToolContext) -> str:
     await shell_manager.terminate_session(session_id)
     await agent.framework.quit_via_router(session_id)
     return "Session tasks stopped."
+
+
+@tool(name="model", context=True)
+async def set_model(model_id: str, *, context: ToolContext) -> str:
+    """Switch the model for THIS session. Invoke as the `,model <model_id>` command.
+
+    Takes effect on the NEXT turn and persists across restarts. Pass any
+    ``provider:model`` string (for example ``openai:gpt-4o`` or
+    ``openrouter:openrouter/free``). An invalid model surfaces as an error on the
+    next turn — run `,model <valid_id>` again to recover.
+    """
+    context.state["model"] = model_id
+    # Persist on the session tape (merged back at end of turn); load_state
+    # recovers the latest `model_switch` event next turn / after restart.
+    await context.tape.append_event("model_switch", {"model": model_id})
+    return f"Session model set to {model_id} (applies from the next turn)."
 
 
 def _resolve_path(context: ToolContext, raw_path: str) -> Path:

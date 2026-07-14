@@ -3,9 +3,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from typing import ClassVar
 
-from republic import StreamEvent
-
 from bub.channels.message import ChannelMessage
+from bub.runtime import StreamEvent
+from bub.turn_admission import AdmitDecision, TurnSnapshot
+from bub.types import Envelope
 
 
 class Channel(ABC):
@@ -39,6 +40,15 @@ class Channel(ABC):
     def stream_events(self, message: ChannelMessage, stream: AsyncIterable[StreamEvent]) -> AsyncIterable[StreamEvent]:
         """Optionally wrap the output stream for this channel."""
         return stream
+
+    async def admit_message(
+        self,
+        session_id: str,
+        message: Envelope,
+        turn: TurnSnapshot,
+    ) -> AdmitDecision | None:
+        """Optionally admit or reject an incoming message before processing."""
+        return None
 
 
 class Interface(Channel):

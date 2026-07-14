@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from republic import ToolContext
 
 import bub.builtin.tools as builtin_tools
 from bub.builtin.tools import tape_search
+from bub.tools import ToolContext
 
 
 @dataclass(frozen=True)
@@ -18,10 +18,29 @@ class _FakeEntry:
 class _FakeTapes:
     def __init__(self, entries: list[_FakeEntry]) -> None:
         self._entries = entries
-        self._store = object()
+
+    def scoped(self, _tape: str) -> _FakeTapes:
+        return self
+
+    def query(self) -> _FakeQuery:
+        return _FakeQuery()
 
     async def search(self, _query: object) -> list[_FakeEntry]:
         return list(self._entries)
+
+
+class _FakeQuery:
+    def query(self, _value: str) -> _FakeQuery:
+        return self
+
+    def kinds(self, *_kinds: str) -> _FakeQuery:
+        return self
+
+    def limit(self, _value: int) -> _FakeQuery:
+        return self
+
+    def between_dates(self, _start: str, _end: str) -> _FakeQuery:
+        return self
 
 
 class _FakeAgent:
@@ -37,7 +56,7 @@ async def test_tape_search_reports_shown_matches_and_filtered_count(monkeypatch)
     ]
     monkeypatch.setattr(builtin_tools, "_get_agent", lambda _context: _FakeAgent(entries))
 
-    output = await tape_search.run(query="x", context=ToolContext(tape="tape", run_id="run", state={}))
+    output = await tape_search.run(query="x", context=ToolContext(tape=_FakeTapes(entries), run_id="run", state={}))
 
     assert output.splitlines()[0] == "[tape.search]: 1 matches (1 filtered)"
 
@@ -50,6 +69,6 @@ async def test_tape_search_reports_zero_filtered_explicitly(monkeypatch) -> None
     ]
     monkeypatch.setattr(builtin_tools, "_get_agent", lambda _context: _FakeAgent(entries))
 
-    output = await tape_search.run(query="x", context=ToolContext(tape="tape", run_id="run", state={}))
+    output = await tape_search.run(query="x", context=ToolContext(tape=_FakeTapes(entries), run_id="run", state={}))
 
     assert output.splitlines()[0] == "[tape.search]: 2 matches (0 filtered)"

@@ -6,12 +6,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from republic import AsyncStreamEvents, StreamEvent
 
 from bub.builtin.hook_impl import AGENTS_FILE_NAME, DEFAULT_SYSTEM_PROMPT, BuiltinImpl
 from bub.builtin.store import FileTapeStore
+from bub.builtin.tape import Tape
 from bub.channels.message import ChannelMessage
 from bub.framework import BubFramework
+from bub.runtime import AsyncStreamEvents, StreamEvent
+from bub.tape import AsyncTapeStoreAdapter, InMemoryTapeStore, TapeContext
 
 
 class RecordingLifespan:
@@ -26,18 +28,36 @@ class RecordingLifespan:
         self.exit_args = (exc_type, exc, traceback)
 
 
+def _fake_tape(home: Path) -> Tape:
+    return Tape(
+        archive_path=home / "tapes",
+        store=AsyncTapeStoreAdapter(InMemoryTapeStore()),
+        context=TapeContext(),
+    )
+
+
 class FakeAgent:
-    def __init__(self, home: Path) -> None:
+    def __init__(self, home: Path, *, tape: Tape | None = None) -> None:
         self.settings = SimpleNamespace(home=home)
+        # A real in-memory async tape so load_state's recovery path runs against
+        # the same store the tests write `model_switch` events to.
+        self.tape = tape if tape is not None else _fake_tape(home)
         self.run_calls: list[tuple[str, str, dict[str, object]]] = []
-        self.run_stream_calls: list[tuple[str, str, dict[str, object]]] = []
+        self.run_stream_calls: list[tuple[str, str, dict[str, object], str | None]] = []
 
     async def run(self, *, session_id: str, prompt: str, state: dict[str, object]) -> str:
         self.run_calls.append((session_id, prompt, state))
         return "agent-output"
 
-    async def run_stream(self, *, session_id: str, prompt: str, state: dict[str, object]) -> AsyncStreamEvents:
-        self.run_stream_calls.append((session_id, prompt, state))
+    async def run_stream(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        state: dict[str, object],
+        model: str | None = None,
+    ) -> AsyncStreamEvents:
+        self.run_stream_calls.append((session_id, prompt, state, model))
 
         async def iterator():
             yield StreamEvent("text", {"delta": "agent-output"})
@@ -49,8 +69,8 @@ def _raise_value_error() -> None:
     raise ValueError("boom")
 
 
-def _build_impl(tmp_path: Path) -> tuple[BubFramework, BuiltinImpl, FakeAgent]:
-    framework = BubFramework()
+def _build_impl(tmp_path: Path, config_file: Path | None = None) -> tuple[BubFramework, BuiltinImpl, FakeAgent]:
+    framework = BubFramework(config_file=config_file) if config_file is not None else BubFramework()
     impl = BuiltinImpl(framework)
     agent = FakeAgent(tmp_path)
     impl._agent = agent
@@ -109,6 +129,43 @@ async def test_load_state_and_save_state_manage_lifespan_and_context(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_load_state_injects_model_recorded_on_session_tape(tmp_path: Path) -> None:
+    """A model_switch event recorded on the session tape is restored into state on load."""
+    _, impl, agent = _build_impl(tmp_path)
+    session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
+    await session.append_event("model_switch", {"model": "openai:gpt-4o"})
+
+    message = ChannelMessage(session_id="session", channel="cli", chat_id="room", content="hello")
+
+    state = await impl.load_state(message=message, session_id="resolved-session")
+
+    assert state["model"] == "openai:gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_load_state_does_not_inject_model_for_unknown_session(tmp_path: Path) -> None:
+    """A session with nothing recorded on its tape must not inherit any model (no leakage)."""
+    _, impl, _ = _build_impl(tmp_path)
+
+    message = ChannelMessage(session_id="session", channel="cli", chat_id="room", content="hello")
+
+    state = await impl.load_state(message=message, session_id="fresh-session")
+
+    assert "model" not in state
+
+
+@pytest.mark.asyncio
+async def test_recover_session_model_returns_latest_recorded(tmp_path: Path) -> None:
+    """When several switches were recorded, the most recent one wins."""
+    _, impl, agent = _build_impl(tmp_path)
+    session = agent.tape.session_tape("resolved-session", impl.framework.workspace)
+    await session.append_event("model_switch", {"model": "openai:gpt-4o"})
+    await session.append_event("model_switch", {"model": "anthropic:claude-3"})
+
+    assert await impl._recover_session_model("resolved-session") == "anthropic:claude-3"
+
+
+@pytest.mark.asyncio
 async def test_build_prompt_marks_commands_and_prefixes_context(tmp_path: Path) -> None:
     _, impl, _ = _build_impl(tmp_path)
     command = ChannelMessage(session_id="s", channel="cli", chat_id="room", content=",help")
@@ -152,18 +209,6 @@ async def test_build_prompt_uses_system_timezone_for_context_date(
 
 
 @pytest.mark.asyncio
-async def test_run_model_delegates_to_agent(tmp_path: Path) -> None:
-    _, impl, agent = _build_impl(tmp_path)
-    state = {"context": "ctx"}
-
-    result = await impl.run_model(prompt="prompt", session_id="session", state=state)
-
-    assert result == "agent-output"
-    assert agent.run_calls == [("session", "prompt", state)]
-    assert agent.run_stream_calls == []
-
-
-@pytest.mark.asyncio
 async def test_run_model_stream_delegates_to_agent(tmp_path: Path) -> None:
     _, impl, agent = _build_impl(tmp_path)
     state = {"context": "ctx"}
@@ -172,8 +217,70 @@ async def test_run_model_stream_delegates_to_agent(tmp_path: Path) -> None:
     events = [event async for event in stream]
 
     assert [(event.kind, event.data) for event in events] == [("text", {"delta": "agent-output"})]
-    assert agent.run_stream_calls == [("session", "prompt", state)]
+    assert agent.run_stream_calls == [("session", "prompt", state, None)]
     assert agent.run_calls == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_override_is_passed_to_agent(tmp_path: Path) -> None:
+    _, impl, agent = _build_impl(tmp_path)
+    message = ChannelMessage(
+        session_id="session",
+        channel="cli",
+        chat_id="room",
+        content="hello",
+        context={"model": "anthropic:claude-sonnet-4-5"},
+    )
+
+    state = await impl.load_state(message=message, session_id="session")
+    stream = await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
+    events = [event async for event in stream]
+
+    assert [(event.kind, event.data) for event in events] == [("text", {"delta": "agent-output"})]
+    assert agent.run_stream_calls == [("session", "prompt", state, "anthropic:claude-sonnet-4-5")]
+
+
+@pytest.mark.asyncio
+async def test_run_model_stream_forwards_state_model_override(tmp_path: Path) -> None:
+    """state['model'] must be forwarded as the per-call model override."""
+    _, impl, agent = _build_impl(tmp_path)
+    state = {"model": "openai:gpt-4o"}
+
+    await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
+
+    assert agent.run_stream_calls == [("session", "prompt", state, "openai:gpt-4o")]
+
+
+@pytest.mark.asyncio
+async def test_run_model_stream_passes_none_when_state_has_no_model(tmp_path: Path) -> None:
+    """Without state['model'] the agent must fall back to its configured model."""
+    _, impl, agent = _build_impl(tmp_path)
+    state = {"context": "ctx"}
+
+    await impl.run_model_stream(prompt="prompt", session_id="session", state=state)
+
+    assert agent.run_stream_calls[-1][3] is None
+
+
+def test_builtin_provides_model_runtime_options(tmp_path: Path, load_config) -> None:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.delenv("BUB_MODEL", raising=False)
+        monkeypatch.delenv("BUB_FALLBACK_MODELS", raising=False)
+        config_file = load_config(
+            """
+model: openai:gpt-5
+fallback_models:
+  - anthropic:claude-sonnet-4-5
+  - openai:gpt-5
+""".strip()
+        )
+        _, impl, _ = _build_impl(tmp_path, config_file=config_file)
+
+        options = impl.provide_runtime_options(session_id="session")
+
+        assert options is not None
+        assert options.current_model == "openai:gpt-5"
+        assert [item.id for item in options.models] == ["openai:gpt-5", "anthropic:claude-sonnet-4-5"]
 
 
 def test_system_prompt_appends_workspace_agents_file(tmp_path: Path) -> None:

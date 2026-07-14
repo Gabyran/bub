@@ -12,9 +12,23 @@ from typing import TYPE_CHECKING
 from bub.configure import Settings, config, ensure_config
 from bub.framework import DEFAULT_HOME, BubFramework
 from bub.hookspecs import hookimpl
+from bub.runtime import RuntimeChoice, RuntimeOptions
 from bub.tools import tool
+from bub.turn_admission import AdmitDecision, TurnSnapshot
 
-__all__ = ["BubFramework", "Settings", "config", "ensure_config", "home", "hookimpl", "tool"]
+__all__ = [
+    "AdmitDecision",
+    "BubFramework",
+    "RuntimeChoice",
+    "RuntimeOptions",
+    "Settings",
+    "TurnSnapshot",
+    "config",
+    "ensure_config",
+    "home",
+    "hookimpl",
+    "tool",
+]
 
 try:
     __version__ = import_module("bub._version").version
@@ -32,6 +46,6 @@ if TYPE_CHECKING:
 def __getattr__(name: str):
     if name == "home":
         if "BUB_HOME" in os.environ:
-            return Path(os.environ["BUB_HOME"])
+            return Path(os.path.expanduser(os.environ["BUB_HOME"]))
         return DEFAULT_HOME
     raise AttributeError(f"module {__name__} has no attribute {name}")

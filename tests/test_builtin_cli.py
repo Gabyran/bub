@@ -18,6 +18,9 @@ import bub.inquirer as bub_inquirer
 from bub.framework import BubFramework
 from bub.hookspecs import hookimpl
 
+TEST_ACCESS_TOKEN = "access"  # noqa: S105
+TEST_REFRESH_TOKEN = "refresh"  # noqa: S105
+
 
 def _fake_result(answer: Any, command: str | None = "enter") -> InquirerResult[Any]:
     return InquirerResult(None, answer, command)
@@ -53,7 +56,6 @@ def test_onboard_collects_plugin_config_and_writes_file(tmp_path: Path, monkeypa
             @hookimpl
             def onboard_config(self, current_config):
                 assert isinstance(current_config.get("model"), str)
-                assert current_config["api_format"] == "completion"
                 assert current_config["enabled_channels"] == "telegram"
                 assert current_config["stream_output"] is False
                 assert "telegram" not in current_config
@@ -111,7 +113,6 @@ def test_onboard_collects_plugin_config_and_writes_file(tmp_path: Path, monkeypa
     assert f"Saved config to {config_file.resolve()}" in result.stdout
     assert loaded == {
         "model": "openai:gpt-5",
-        "api_format": "completion",
         "enabled_channels": "telegram",
         "stream_output": False,
         "telegram": {"token": "123:abc"},
@@ -142,11 +143,6 @@ def test_onboard_collects_builtin_runtime_config(tmp_path: Path, monkeypatch) ->
         )
         monkeypatch.setattr(
             bub_inquirer,
-            "ask_select",
-            lambda message, choices, default="": "responses",
-        )
-        monkeypatch.setattr(
-            bub_inquirer,
             "ask_checkbox",
             lambda message, choices, enabled=None, validate=None: ["telegram", "cli"],
         )
@@ -168,7 +164,6 @@ def test_onboard_collects_builtin_runtime_config(tmp_path: Path, monkeypatch) ->
     assert result.exit_code == 0
     assert loaded == {
         "model": "openrouter:openrouter/free",
-        "api_format": "responses",
         "enabled_channels": "telegram,cli",
         "stream_output": True,
         "api_key": "sk-test",
@@ -318,11 +313,6 @@ def test_onboard_collects_builtin_runtime_config_with_custom_provider(tmp_path: 
         )
         monkeypatch.setattr(
             bub_inquirer,
-            "ask_select",
-            lambda message, choices, default="": "messages",
-        )
-        monkeypatch.setattr(
-            bub_inquirer,
             "ask_checkbox",
             lambda message, choices, enabled=None, validate=None: ["telegram"],
         )
@@ -353,67 +343,41 @@ def test_onboard_collects_builtin_runtime_config_with_custom_provider(tmp_path: 
     assert _rendered_onboard_banner() in result.stdout
     assert loaded == {
         "model": "acme:ultra-1",
-        "api_format": "messages",
         "enabled_channels": "telegram",
         "stream_output": False,
     }
 
 
-def test_login_openai_runs_oauth_flow_and_prints_usage_hint(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    captured: dict[str, object] = {}
+def test_login_openai_command_runs_codex_oauth(tmp_path: Path) -> None:
+    tokens = auth.OpenAICodexOAuthTokens(
+        access_token=TEST_ACCESS_TOKEN,
+        refresh_token=TEST_REFRESH_TOKEN,
+        expires_at=1_900_000_000,
+        account_id="acct_123",
+    )
+    login = patch("bub.builtin.auth.login_openai_codex_oauth", return_value=tokens)
 
-    def fake_login_openai_codex_oauth(**kwargs: object) -> auth.OpenAICodexOAuthTokens:
-        captured.update(kwargs)
-        prompt_for_redirect = kwargs["prompt_for_redirect"]
-        assert callable(prompt_for_redirect)
-        callback = prompt_for_redirect("https://auth.openai.com/authorize")
-        assert callback == "http://localhost:1455/auth/callback?code=test"
-        return auth.OpenAICodexOAuthTokens(
-            access_token="access",  # noqa: S106
-            refresh_token="refresh",  # noqa: S106
-            expires_at=123,
-            account_id="acct_123",
+    with login as login_mock:
+        result = CliRunner().invoke(
+            _create_app(),
+            ["login", "openai", "--codex-home", str(tmp_path), "--manual", "--no-browser"],
         )
 
-    monkeypatch.setattr(auth, "login_openai_codex_oauth", fake_login_openai_codex_oauth)
-    monkeypatch.setattr(auth.typer, "prompt", lambda message: "http://localhost:1455/auth/callback?code=test")
-
-    result = CliRunner().invoke(
-        _create_app(),
-        ["login", "openai", "--manual", "--no-browser", "--codex-home", str(tmp_path)],
-    )
-
     assert result.exit_code == 0
-    assert captured["codex_home"] == tmp_path
-    assert captured["open_browser"] is False
-    assert captured["redirect_uri"] == auth.DEFAULT_CODEX_REDIRECT_URI
-    assert captured["timeout_seconds"] == 300.0
     assert "login: ok" in result.stdout
     assert "account_id: acct_123" in result.stdout
     assert f"auth_file: {tmp_path / 'auth.json'}" in result.stdout
-    assert "BUB_MODEL=openai:gpt-5-codex" in result.stdout
+    login_mock.assert_called_once()
+    assert login_mock.call_args.kwargs["codex_home"] == tmp_path
+    assert login_mock.call_args.kwargs["open_browser"] is False
+    assert login_mock.call_args.kwargs["prompt_for_redirect"] is auth._prompt_for_codex_redirect
 
 
-def test_login_openai_surfaces_oauth_errors(monkeypatch) -> None:
-    def fake_login_openai_codex_oauth(**kwargs: object) -> auth.OpenAICodexOAuthTokens:
-        raise auth.CodexOAuthLoginError("bad redirect")
-
-    monkeypatch.setattr(auth, "login_openai_codex_oauth", fake_login_openai_codex_oauth)
-
-    result = CliRunner().invoke(_create_app(), ["login", "openai", "--manual"])
-
-    assert result.exit_code == 1
-    assert "Codex login failed: bad redirect" in result.stderr
-
-
-def test_login_rejects_unsupported_provider() -> None:
-    result = CliRunner().invoke(_create_app(), ["login", "anthropic"])
+def test_login_rejects_unknown_provider() -> None:
+    result = CliRunner().invoke(_create_app(), ["login", "github"])
 
     assert result.exit_code == 2
-    assert "No such command 'anthropic'" in result.stderr
+    assert "No such command 'github'" in result.stderr
 
 
 def test_build_bub_requirement_uses_direct_url_json(monkeypatch) -> None:

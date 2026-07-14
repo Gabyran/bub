@@ -7,21 +7,187 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from republic import ToolContext
-from republic.core.errors import ErrorKind
-from republic.tools.executor import ToolExecutor
 
 import bub.builtin.tools as builtin_tools
 from bub.builtin.shell_manager import ShellManager
-from bub.builtin.tools import bash, bash_output, kill_bash, quit_tool
+from bub.builtin.tape import Tape
+from bub.builtin.tools import (
+    bash,
+    bash_output,
+    completion_tools,
+    kill_bash,
+    model_tools,
+    quit_tool,
+    render_tools_prompt,
+    resolve_tool_names,
+    set_model,
+)
+from bub.runtime import ErrorKind
+from bub.tape import AsyncTapeStoreAdapter, InMemoryTapeStore, TapeContext
+from bub.tools import REGISTRY, Tool, ToolContext, ToolExecutor, tool
 
 
 def _tool_context(tmp_path, **state) -> ToolContext:
-    return ToolContext(tape="test-tape", run_id="test-run", state={"_runtime_workspace": str(tmp_path), **state})
+    tape = Tape(tmp_path, AsyncTapeStoreAdapter(InMemoryTapeStore()), TapeContext()).scoped("test-tape")
+    return ToolContext(tape=tape, run_id="test-run", state={"_runtime_workspace": str(tmp_path), **state})
 
 
 def _python_shell(code: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+
+
+def test_completion_tools_builds_any_llm_payload() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+    }
+    sample_tool = Tool(
+        name="tests_sample_tool",
+        description="Sample tool",
+        parameters=parameters,
+        handler=lambda value: value,
+    )
+
+    assert completion_tools([sample_tool]) == [
+        {
+            "type": "function",
+            "function": {
+                "name": "tests_sample_tool",
+                "description": "Sample tool",
+                "parameters": parameters,
+            },
+        }
+    ]
+
+
+def test_model_tools_rewrites_dotted_names_without_mutating_original() -> None:
+    tool_name = "tests.rename_me"
+    REGISTRY.pop(tool_name, None)
+
+    @tool(name=tool_name, description="rename")
+    def rename_me(value: str) -> str:
+        return "ok"
+
+    rewritten = model_tools([rename_me])
+
+    assert [item.name for item in rewritten] == ["tests_rename_me"]
+    assert rewritten[0].parameters == rename_me.parameters
+    assert rename_me.name == tool_name
+    assert "additionalProperties" not in rename_me.parameters
+
+
+def test_render_tools_prompt_renders_available_tools_block() -> None:
+    first_name = "tests.prompt_one"
+    second_name = "tests.prompt_two"
+    REGISTRY.pop(first_name, None)
+    REGISTRY.pop(second_name, None)
+
+    @tool(name=first_name, description="First tool")
+    def prompt_one() -> str:
+        return "one"
+
+    @tool(name=second_name)
+    def prompt_two() -> str:
+        return "two"
+
+    rendered = render_tools_prompt([prompt_one, prompt_two])
+
+    assert rendered == "<available_tools>\n- tests_prompt_one(): First tool\n- tests_prompt_two()\n</available_tools>"
+
+
+def test_render_tools_prompt_includes_model_name_and_parameter_signature() -> None:
+    tool_name = "tests.prompt_signature"
+    REGISTRY.pop(tool_name, None)
+
+    @tool(name=tool_name, description="Read a file")
+    def prompt_signature(path: str, offset: int = 0) -> str:
+        return f"{path}:{offset}"
+
+    rendered = render_tools_prompt([prompt_signature])
+
+    assert rendered == "<available_tools>\n- tests_prompt_signature(path, offset?): Read a file\n</available_tools>"
+
+
+def test_render_tools_prompt_returns_empty_string_for_empty_input() -> None:
+    assert render_tools_prompt([]) == ""
+
+
+def test_resolve_tool_names_accepts_runtime_names_and_model_aliases() -> None:
+    dotted_name = "tests.resolve_alias"
+    underscored_name = "tests_with_underscore"
+    excluded_name = "tests.excluded_tool"
+    REGISTRY.pop(dotted_name, None)
+    REGISTRY.pop(underscored_name, None)
+    REGISTRY.pop(excluded_name, None)
+
+    @tool(name=dotted_name)
+    def resolve_alias() -> str:
+        return "alias"
+
+    @tool(name=underscored_name)
+    def resolve_runtime_name() -> str:
+        return "runtime"
+
+    @tool(name=excluded_name)
+    def excluded_tool() -> str:
+        return "excluded"
+
+    assert resolve_tool_names(
+        [" tests_resolve_alias ", " tests_with_underscore "], exclude={" tests_excluded_tool "}
+    ) == {
+        dotted_name,
+        underscored_name,
+    }
+    assert dotted_name not in resolve_tool_names(None, exclude={" tests_resolve_alias "})
+    assert excluded_name not in resolve_tool_names(None, exclude={" tests_excluded_tool "})
+    assert resolve_tool_names(None, exclude={" tests_resolve_alias "}) >= {underscored_name}
+
+
+def test_resolve_tool_names_rejects_unknown_names() -> None:
+    with pytest.raises(ValueError, match="tests_missing_tool"):
+        resolve_tool_names([" tests_missing_tool "])
+
+    with pytest.raises(ValueError, match="tests_missing_tool"):
+        resolve_tool_names(None, exclude={" tests_missing_tool "})
+
+
+def test_set_model_is_registered_with_context() -> None:
+    assert "model" in REGISTRY
+    tool_obj = REGISTRY["model"]
+    assert tool_obj.context is True
+    assert tool_obj.parameters == {
+        "type": "object",
+        "properties": {"model_id": {"type": "string"}},
+        "required": ["model_id"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_model_writes_model_into_state_and_records_on_tape(tmp_path) -> None:
+    context = _tool_context(tmp_path)
+    assert "model" not in context.state
+
+    result = await set_model.run(model_id="openai:gpt-4o", context=context)
+
+    assert context.state["model"] == "openai:gpt-4o"
+    assert "openai:gpt-4o" in result
+    assert "next turn" in result.lower()
+    # The switch is also persisted as a `model_switch` event on the session
+    # tape, which load_state recovers on the next turn / after restart.
+    entries = list(await context.tape.store.fetch_all(context.tape.query().kinds("event")))
+    switches = [entry for entry in entries if entry.kind == "event" and entry.payload.get("name") == "model_switch"]
+    assert len(switches) == 1
+    assert switches[0].payload.get("data") == {"model": "openai:gpt-4o"}
+
+
+@pytest.mark.asyncio
+async def test_set_model_overwrites_previous_model(tmp_path) -> None:
+    context = _tool_context(tmp_path, model="openai:gpt-4o")
+
+    await set_model.run(model_id="anthropic:claude-3", context=context)
+
+    assert context.state["model"] == "anthropic:claude-3"
 
 
 @pytest.mark.asyncio
@@ -77,15 +243,8 @@ async def test_foreground_bash_terminates_shell_when_cancelled(tmp_path, monkeyp
 async def test_bash_non_zero_exit_is_returned_as_tool_error(tmp_path) -> None:
     command = _python_shell("import sys; print('boom'); sys.exit(7)")
     executor = ToolExecutor()
-    tool_call = {
-        "type": "function",
-        "function": {
-            "name": bash.name,
-            "arguments": {"cmd": command},
-        },
-    }
 
-    result = await executor.execute_async([tool_call], tools=[bash], context=_tool_context(tmp_path))
+    result = await executor.execute_async([(bash, {"cmd": command})], context=_tool_context(tmp_path))
 
     assert result.error is not None
     assert result.error.kind is ErrorKind.TOOL
