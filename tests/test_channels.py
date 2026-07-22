@@ -392,10 +392,8 @@ async def test_cli_channel_accepts_input_while_previous_message_is_running() -> 
 
     await asyncio.wait_for(channel._main_loop(), timeout=1)
 
-    import bub.channels.cli as cli_module
-
     assert [message.content for message in received] == ["first", "second"]
-    assert channel._prompt.refresh_intervals == [cli_module._PROMPT_REFRESH_INTERVAL] * 3
+    assert channel._prompt.refresh_intervals == [None] * 3
     assert channel._prompt.received_callables == [True, True, True]
     assert "Generating\n" not in channel._prompt.messages[0]
     assert "Generating\n" in channel._prompt.messages[1]
@@ -409,6 +407,7 @@ def test_cli_channel_build_prompt_erases_submitted_prompt(monkeypatch: pytest.Mo
     class FakePromptSession:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
+            self.app = SimpleNamespace(min_redraw_interval=None)
 
     monkeypatch.setattr("bub.channels.cli.PromptSession", FakePromptSession)
     channel = CliChannel.__new__(CliChannel)
@@ -929,7 +928,8 @@ async def test_cli_channel_stream_events_prints_stream_and_yields_events(monkeyp
     yielded = [event async for event in channel.stream_events(message, source())]
 
     assert heads == ["command"]
-    assert printed == [("hel\n", "", False), ("hello\n", "", False)]
+    assert len(printed) == 1
+    assert getattr(printed[0][0], "markup", None) == "hello"
     assert [event.kind for event in yielded] == ["text", "text", "final"]
 
 
@@ -939,21 +939,37 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
         import asyncio
 
         from prompt_toolkit import PromptSession
+        from prompt_toolkit.formatted_text import ANSI, FormattedText, merge_formatted_text
         from prompt_toolkit.patch_stdout import patch_stdout
         from rich.console import Console
 
         from bub.channels.cli import _StreamPrinter
+        from bub.channels.cli.ansi_bridge import render_to_ansi
+        from bub.channels.cli.terminal_output import create_synchronized_output
+        from bub.channels.cli.writers import PlainTextWriter
         from bub.streaming import StreamEvent
 
 
         async def main():
             console = Console(force_terminal=True, color_system=None, width=80)
+            output = create_synchronized_output()
+            assert output is not None
+            session = PromptSession(erase_when_done=True, output=output)
+            session.app.min_redraw_interval = 0.08
             printer = _StreamPrinter(
                 console=console,
                 print_head=lambda: console.print("Assistant >"),
                 expand_thinking=False,
+                writer=PlainTextWriter(),
+                invalidate=session.app.invalidate,
             )
-            session = PromptSession(erase_when_done=True)
+
+            def prompt_message():
+                body = render_to_ansi(printer.compose(), width=console.width).rstrip("\\n")
+                return merge_formatted_text([
+                    ANSI(body),
+                    FormattedText([("bold", "\\nbub > ")]),
+                ])
 
             async def stream():
                 chunks = [
@@ -976,10 +992,7 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
 
             task = asyncio.create_task(stream())
             with patch_stdout(raw=True):
-                await session.prompt_async(
-                    lambda: [("", "\\n* Generating\\nbub > ")],
-                    refresh_interval=0.02,
-                )
+                await session.prompt_async(prompt_message)
             await task
 
 
@@ -989,6 +1002,7 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
     master_fd, slave_fd = pty.openpty()
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{Path.cwd() / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["TERM"] = "xterm-256color"
     process = subprocess.Popen(
         [sys.executable, "-c", script],
         stdin=slave_fd,
@@ -1002,7 +1016,7 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
     try:
         time.sleep(0.25)
         os.write(master_fd, b"next\n")
-        raw_output = _read_pty_until_exit(master_fd, process)
+        raw_output = _read_pty_until_exit(master_fd, process, timeout=15)
     finally:
         if process.poll() is None:
             process.terminate()
@@ -1072,7 +1086,7 @@ async def test_cli_channel_collapsed_reasoning_does_not_start_status_spinner(
 
     assert [event.kind for event in yielded] == ["reasoning", "text", "final"]
     assert printed
-    assert any("hello" in str(item) for item in printed)
+    assert any(getattr(item, "markup", None) == "hello" for item in printed)
 
 
 def test_cli_channel_history_file_uses_workspace_hash(tmp_path: Path) -> None:
