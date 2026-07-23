@@ -173,8 +173,10 @@ class _StreamPrinter:
         if self._writer.has_content():
             flushed = self._writer.flush()
             if flushed is not None:
+
                 def render() -> None:
                     self._console.print(flushed)
+
                 await self._run_in_terminal(render)
         self._invalidate()
 

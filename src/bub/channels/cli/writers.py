@@ -114,20 +114,20 @@ class PlainTextWriter:
         self._buffer += text
 
     def can_commit(self) -> bool:
-        return "\n" in self._buffer[self._committed_up_to:]
+        return "\n" in self._buffer[self._committed_up_to :]
 
     def render_committed(self) -> str:
-        uncommitted = self._buffer[self._committed_up_to:]
+        uncommitted = self._buffer[self._committed_up_to :]
         last_nl = uncommitted.rfind("\n")
         return uncommitted[: last_nl + 1]
 
     def render_partial(self) -> str:
-        uncommitted = self._buffer[self._committed_up_to:]
+        uncommitted = self._buffer[self._committed_up_to :]
         last_nl = uncommitted.rfind("\n")
-        return uncommitted[last_nl + 1:]
+        return uncommitted[last_nl + 1 :]
 
     def commit(self) -> bool:
-        uncommitted = self._buffer[self._committed_up_to:]
+        uncommitted = self._buffer[self._committed_up_to :]
         last_nl = uncommitted.rfind("\n")
         if last_nl < 0:
             return False
@@ -135,14 +135,14 @@ class PlainTextWriter:
         return True
 
     def flush(self) -> str | None:
-        remaining = self._buffer[self._committed_up_to:]
+        remaining = self._buffer[self._committed_up_to :]
         if not remaining:
             return None
         self._committed_up_to = len(self._buffer)
         return remaining + "\n"
 
     def has_content(self) -> bool:
-        return bool(self._buffer[self._committed_up_to:])
+        return bool(self._buffer[self._committed_up_to :])
 
     def reset(self) -> None:
         self._buffer = ""
@@ -179,7 +179,7 @@ class MarkdownWriter:
         self._reparse()
 
     def _reparse(self) -> None:
-        uncommitted = self._buffer[len(self._committed_text):]
+        uncommitted = self._buffer[len(self._committed_text) :]
         split_at = _committable_prefix_length(uncommitted)
         self._to_commit = uncommitted[:split_at]
         self._partial = uncommitted[split_at:]
@@ -203,7 +203,7 @@ class MarkdownWriter:
         return True
 
     def flush(self) -> Markdown | None:
-        uncommitted = self._buffer[len(self._committed_text):]
+        uncommitted = self._buffer[len(self._committed_text) :]
         if not uncommitted.strip():
             return None
         self._committed_text = self._buffer
@@ -212,7 +212,7 @@ class MarkdownWriter:
         return _markdown(uncommitted.rstrip())
 
     def has_content(self) -> bool:
-        uncommitted = self._buffer[len(self._committed_text):]
+        uncommitted = self._buffer[len(self._committed_text) :]
         return bool(uncommitted.strip())
 
     def reset(self) -> None:
