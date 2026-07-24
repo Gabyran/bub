@@ -356,8 +356,6 @@ def test_channel_manager_selects_real_channel_types(load_config) -> None:
 
 @pytest.mark.asyncio
 async def test_cli_channel_accepts_input_while_previous_message_is_running() -> None:
-    from bub.channels.cli import _PROMPT_REFRESH_INTERVAL
-
     received: list[ChannelMessage] = []
 
     class FakePrompt:
@@ -400,7 +398,7 @@ async def test_cli_channel_accepts_input_while_previous_message_is_running() -> 
 
     assert [message.content for message in received] == ["first", "second"]
 
-    assert channel._prompt.refresh_intervals == [_PROMPT_REFRESH_INTERVAL] * 3
+    assert channel._prompt.refresh_intervals == [None] * 3
     assert channel._prompt.received_callables == [True, True, True]
     assert echoed == []
     assert all(message.lifespan is not None for message in received)
@@ -520,6 +518,48 @@ async def test_cli_live_layout_keeps_markdown_tail_and_status_visible_when_outpu
     assert "TAIL_MARKER" in visible
     assert "Generating" in visible
     assert f"{Path.cwd().name} >" in visible
+
+
+def test_cli_generation_spinner_refreshes_only_while_model_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidations: list[None] = []
+    callbacks: list[object] = []
+
+    class FakeTimerHandle:
+        def __init__(self) -> None:
+            self._cancelled = False
+
+        def cancel(self) -> None:
+            self._cancelled = True
+
+        def cancelled(self) -> bool:
+            return self._cancelled
+
+    class FakeLoop:
+        def call_later(self, delay, callback):
+            assert delay > 0
+            callbacks.append(callback)
+            return FakeTimerHandle()
+
+    monkeypatch.setattr("bub.channels.cli.asyncio.get_running_loop", FakeLoop)
+    channel = CliChannel.__new__(CliChannel)
+    channel._llm_loop_running = False
+    channel._generation_tick = None
+    channel._prompt = SimpleNamespace(app=SimpleNamespace(invalidate=lambda: invalidations.append(None)))
+
+    channel._set_llm_loop_running(True)
+    assert len(callbacks) == 1
+    first_tick = channel._generation_tick
+    callbacks.pop()()
+    assert len(callbacks) == 1
+    second_tick = channel._generation_tick
+    channel._set_llm_loop_running(False)
+
+    assert first_tick is not second_tick
+    assert second_tick.cancelled()
+    assert len(invalidations) == 3
+    assert channel._generation_tick is None
 
 
 @pytest.mark.asyncio
@@ -1237,7 +1277,8 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
             session.app.min_redraw_interval = 0.08
             channel = CliChannel.__new__(CliChannel)
             channel._mode = "agent"
-            channel._llm_loop_running = True
+            channel._llm_loop_running = False
+            channel._generation_tick = None
             channel._stream_printer = None
             channel._prompt = session
             channel._attach_live_layout(session)
@@ -1250,6 +1291,7 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
                 invalidate=session.app.invalidate,
             )
             channel._stream_printer = printer
+            channel._set_llm_loop_running(True)
 
             async def stream():
                 await asyncio.sleep(0.35)
@@ -1270,11 +1312,11 @@ def test_cli_stream_output_does_not_overlap_active_pty_prompt() -> None:
                 await asyncio.sleep(0.03)
                 await printer.render(StreamEvent("final", {}))
                 channel._stream_printer = None
-                channel._llm_loop_running = False
+                channel._set_llm_loop_running(False)
 
             task = asyncio.create_task(stream())
             with patch_stdout(raw=True):
-                await session.prompt_async(channel._prompt_message, refresh_interval=0.08)
+                await session.prompt_async(channel._prompt_message)
             await task
 
 

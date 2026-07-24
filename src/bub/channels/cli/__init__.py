@@ -208,6 +208,7 @@ class CliChannel(Interface):
         self._mode = "agent"  # or "shell"
         self._expand_thinking = False
         self._llm_loop_running = False
+        self._generation_tick: asyncio.TimerHandle | None = None
         self._main_task: asyncio.Task | None = None
         self._stream_printer: _StreamPrinter | None = None
         self._renderer = CliRenderer(get_console())
@@ -237,6 +238,7 @@ class CliChannel(Interface):
         self._main_task = asyncio.create_task(self._main_loop())
 
     async def stop(self) -> None:
+        self._stop_generation_animation()
         if self._main_task is not None:
             self._main_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -256,12 +258,7 @@ class CliChannel(Interface):
         while not self._stop_event.is_set():
             try:
                 with patch_stdout(raw=True):
-                    raw = (
-                        await self._prompt.prompt_async(
-                            self._prompt_message,
-                            refresh_interval=_PROMPT_REFRESH_INTERVAL,
-                        )
-                    ).strip()
+                    raw = (await self._prompt.prompt_async(self._prompt_message)).strip()
             except KeyboardInterrupt:
                 await self._presenter.write(lambda: self._renderer.info("Interrupted. Use ',quit' to exit."))
                 continue
@@ -294,6 +291,7 @@ class CliChannel(Interface):
                 self._set_llm_loop_running(False)
                 raise
 
+        self._stop_generation_animation()
         await self._presenter.write(lambda: self._renderer.info("Bye."))
         self._stop_event.set()
 
@@ -454,7 +452,32 @@ class CliChannel(Interface):
         if self._llm_loop_running == running:
             return
         self._llm_loop_running = running
+        if running:
+            self._schedule_generation_tick()
+        else:
+            self._stop_generation_animation()
         self._invalidate_prompt()
+
+    def _schedule_generation_tick(self) -> None:
+        if getattr(self, "_generation_tick", None) is not None:
+            return
+        self._generation_tick = asyncio.get_running_loop().call_later(
+            _PROMPT_REFRESH_INTERVAL,
+            self._tick_generation_status,
+        )
+
+    def _tick_generation_status(self) -> None:
+        self._generation_tick = None
+        if not self._llm_loop_running:
+            return
+        self._invalidate_prompt()
+        self._schedule_generation_tick()
+
+    def _stop_generation_animation(self) -> None:
+        tick: asyncio.TimerHandle | None = getattr(self, "_generation_tick", None)
+        if tick is not None:
+            tick.cancel()
+            self._generation_tick = None
 
     @staticmethod
     def _history_file(home: Path, workspace: Path) -> Path:
