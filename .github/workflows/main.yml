@@ -51,7 +51,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          package_json_file: website/package.json
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -62,5 +62,6 @@ jobs:
 
       - name: Check if documentation can be built
         run: |
+          diff -u .node-version website/.node-version
           pnpm --dir website install --frozen-lockfile
           pnpm --dir website build

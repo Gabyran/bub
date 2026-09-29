@@ -45,11 +45,6 @@
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
 
-/* Animation utilities — imported unlayered because tw-animate-css
-   uses @utility directives that cannot be nested inside @layer. */
-@import "tw-animate-css";
-
-
 /* ═══ Tailwind theme tokens ═══ */
 @theme inline {
     /* ─ Typography ─ */
@@ -352,7 +347,8 @@
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
+        /* Even a short transition makes Mermaid measure intermediate SVG transforms. */
+        transition-duration: 0s !important;
         scroll-behavior: auto !important;
     }
 }
