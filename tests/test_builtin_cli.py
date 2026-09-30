@@ -397,6 +397,36 @@ def test_gateway_install_and_uninstall_are_mutually_exclusive() -> None:
     assert "cannot be used together" in result.output
 
 
+@pytest.mark.parametrize(
+    "config,env_prefix,prefix",
+    [("", None, ","), ('command_prefix: "::"', None, "::"), ('command_prefix: "::"', "!", "!")],
+)
+def test_run_help_uses_the_configured_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str, env_prefix: str | None, prefix: str
+) -> None:
+    monkeypatch.setenv("BUB_HOME", str(tmp_path))
+    monkeypatch.delenv("BUB_COMMAND_PREFIX", raising=False)
+    if env_prefix is not None:
+        monkeypatch.setenv("BUB_COMMAND_PREFIX", env_prefix)
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(config, encoding="utf-8")
+    framework = BubFramework(config_file=config_file)
+    framework.workspace = tmp_path
+    framework.load_builtin_hooks()
+    monkeypatch.setattr(
+        "bub.builtin.model_runner.ModelRunner.run",
+        lambda *args, **kwargs: pytest.fail("help must not invoke the model"),
+    )
+
+    result = CliRunner().invoke(framework.create_cli_app(), ["run", f"{prefix}help"])
+
+    assert result.exit_code == 0, result.output
+    assert f"Commands use '{prefix}'" in result.output
+    assert f"{prefix}bash.output" in result.output
+    assert f"{prefix}code_mode enable=true" in result.output
+    assert f"{prefix}quit" in result.output
+
+
 def test_run_command_processes_inbound_inside_framework_runtime(tmp_path: Path) -> None:
     config_file = tmp_path / "config.yml"
     framework = BubFramework(config_file=config_file)

@@ -38,6 +38,7 @@ def _fake_tape(home: Path) -> Tape:
 
 class FakeAgent:
     def __init__(self, home: Path, *, tape: Tape | None = None) -> None:
+        self.command_prefix = ","
         self.settings = SimpleNamespace(home=home)
         self.tools = REGISTRY.copy()
         # A real in-memory async tape so load_state's recovery path runs against
@@ -345,7 +346,7 @@ def test_provide_channels_returns_cli_and_telegram(tmp_path: Path, monkeypatch: 
     class DummyTelegramChannel:
         name = "telegram"
 
-        def __init__(self, on_receive) -> None:
+        def __init__(self, on_receive, *, command_prefix: str) -> None:
             self.on_receive = on_receive
 
         @property

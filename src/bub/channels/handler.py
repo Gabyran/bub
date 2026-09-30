@@ -39,7 +39,7 @@ class BufferedMessageHandler:
 
     async def __call__(self, message: ChannelMessage) -> None:
         now = self._loop.time()
-        if message.content.startswith(","):
+        if message.kind == "command":
             logger.info(
                 "session.message received command session_id={}, content={}", message.session_id, message.content
             )

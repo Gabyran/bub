@@ -4,7 +4,8 @@ from unittest.mock import Mock
 import pytest
 
 from bub.builtin import Agent
-from bub.builtin.tools import resolve_tool_names, run_subagent
+from bub.builtin.codemode import run_code, set_code_mode
+from bub.builtin.tools import resolve_tool_names, run_subagent, show_help
 from bub.framework import BubFramework
 from bub.store import InMemoryTapeStore
 from bub.streaming import AsyncStreamEvents, StreamEvent
@@ -27,6 +28,81 @@ def framework(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BubFramework:
     framework.workspace = tmp_path
     framework.load_builtin_hooks()
     return framework
+
+
+@pytest.mark.asyncio
+async def test_sdk_agents_execute_only_their_own_command_prefix(
+    framework: BubFramework, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BUB_COMMAND_PREFIX", "!")
+    monkeypatch.setattr("bub.builtin.model_runner.ModelRunner.run", lambda *args, **kwargs: _reply())
+    custom = Agent(framework, tools=[show_help], skill_dirs=[], command_prefix="::")
+    configured = Agent(framework, tools=[show_help], skill_dirs=[])
+
+    for agent, prompt, expected in [
+        (custom, " ::help ", "Commands use '::'"),
+        (configured, "!help", "Commands use '!'"),
+        (custom, "!help", "done"),
+        (custom, ",help", "done"),
+    ]:
+        stream = await agent.run_stream(session_id="sdk", prompt=prompt)
+        output = "".join([event.data["delta"] async for event in stream if event.kind == "text"])
+        assert output.startswith(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", [",", "::"])
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_prefixed_code_mode_command_is_restored_by_a_new_agent(
+    framework: BubFramework, prefix: str, enabled: bool
+) -> None:
+    store = InMemoryTapeStore()
+    tools = [set_code_mode, run_code]
+    agent = Agent(framework, tools=tools, tape_store=store, skill_dirs=[], command_prefix=prefix)
+    tape = agent.tape.session_tape("sdk", framework.workspace)
+    await tape.append_event("code_mode_switch", {"code_mode": not enabled})
+
+    stream = await agent.run_stream(session_id="sdk", prompt=f"{prefix}code_mode enable={str(enabled).lower()}")
+    events = [event async for event in stream]
+    status = "enabled" if enabled else "disabled"
+    assert any(
+        event.data.get("delta") == f"Session code mode {status} (applies from the next turn)." for event in events
+    )
+
+    restored = Agent(framework, tools=tools, tape_store=store, skill_dirs=[], command_prefix=prefix)
+    runner = Mock(side_effect=lambda **kwargs: _reply())
+    restored.model_runner.run = runner
+    stream = await restored.run_stream(session_id="sdk", prompt="hello")
+
+    assert [event.kind async for event in stream] == ["text", "final"]
+    call = runner.call_args.kwargs
+    assert call["tape"].context.state["code_mode"] is enabled
+    assert [tool.name for tool in call["tools"]] == (["run_code"] if enabled else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["sdk.lookup", "echo hello"])
+async def test_prefixed_commands_render_structured_results(framework: BubFramework, command: str) -> None:
+    async def lookup(**kwargs: object) -> dict[str, str]:
+        return {"output": "found"}
+
+    command_tool = Tool(
+        name="sdk.lookup" if command == "sdk.lookup" else "bash",
+        handler=lookup,
+        renderer=lambda result: result["output"],
+    )
+    agent = Agent(framework, tools=[command_tool], skill_dirs=[], command_prefix="::")
+
+    stream = await agent.run_stream(session_id="sdk", prompt=f"::{command}")
+    output = "".join([event.data["delta"] async for event in stream if event.kind == "text"])
+
+    assert output == "found"
+    tape = agent.tape.session_tape("sdk", framework.workspace)
+    events = list(await tape.store.fetch_all(tape.query().kinds("event")))
+    recorded = [entry.payload["data"] for entry in events if entry.payload.get("name") == "command"]
+    assert len(recorded) == 1
+    assert recorded[0]["output"] == "found"
+    assert recorded[0]["status"] == "ok"
 
 
 @pytest.mark.asyncio

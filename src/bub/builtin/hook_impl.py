@@ -10,6 +10,7 @@ from loguru import logger
 
 from bub import inquirer as bub_inquirer
 from bub.builtin.agent import Agent
+from bub.builtin.commands import strip_command_prefix
 from bub.builtin.context import default_tape_context
 from bub.builtin.onboarding import collect_model_config
 from bub.builtin.settings import load_session_settings, load_settings
@@ -145,9 +146,9 @@ class BuiltinImpl:
     @hookimpl
     async def build_prompt(self, message: ChannelMessage, session_id: str, state: TurnState) -> str | list[dict]:
         content = content_of(message)
-        if content.startswith(","):
+        if strip_command_prefix(content, self._get_agent(state).command_prefix) is not None:
             message.kind = "command"
-            return content
+            return content.strip()
         context = field_of(message, "context_str")
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         context_prefix = f"{context}\n---Date: {now}---\n" if context else ""
@@ -250,9 +251,10 @@ class BuiltinImpl:
         from bub.channels.cli import CliChannel
         from bub.channels.telegram import TelegramChannel
 
+        agent = self._get_agent()
         return [
-            TelegramChannel(on_receive=message_handler),
-            CliChannel(on_receive=message_handler, agent=self._get_agent()),
+            TelegramChannel(on_receive=message_handler, command_prefix=agent.command_prefix),
+            CliChannel(on_receive=message_handler, agent=agent),
         ]
 
     @hookimpl
