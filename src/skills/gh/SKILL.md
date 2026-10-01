@@ -1,22 +1,24 @@
 ---
 name: gh
-description: GitHub CLI skill for interacting with GitHub via the gh command line tool. Use when Bub needs to (1) Create, view, or manage GitHub repositories, (2) Work with issues and pull requests, (3) Create and manage releases, (4) Run and monitor GitHub Actions workflows, (5) Create and manage gists, or (6) Perform any GitHub operations via command line.
+description: GitHub CLI skill for interacting with GitHub via the gh command line tool. Use when Bub needs to (1) Create, view, or manage GitHub repositories, (2) Work with issues and pull requests, (3) Create and manage releases, (4) Run and monitor GitHub Actions workflows, (5) Create and manage gists, (6) Install and manage agent skills, or (7) Perform any GitHub operations via command line.
 ---
 
 # GitHub CLI (gh) Skill
 
 Interact with GitHub using the gh command line tool.
 
+Run commands with Bub's `bash` tool, setting `cwd` to the target checkout when using local repository context. If it returns a running shell ID, collect the result with `bash.output` before retrying the command.
+
 ## Prerequisites
 
-The GitHub PAT is available via `GITHUB_TOKEN` environment variable or `gh` CLI authentication.
+Use the authentication source specified by the user or workspace. For github.com, `GH_TOKEN` takes precedence over `GITHUB_TOKEN`, and both override stored `gh` credentials.
 
 Check authentication:
 ```bash
 gh auth status
 ```
 
-If not authenticated:
+If not authenticated, report the blocker; do not silently switch credentials. Run interactive login only when the user requests authentication setup:
 ```bash
 gh auth login
 ```
@@ -79,8 +81,24 @@ gh gist list
 gh gist view <id>
 ```
 
+## Skill Operations
+
+```bash
+gh skill search <query>
+gh skill preview <owner/repo> <skill>
+gh skill install <owner/repo> <skill> --dir .agents/skills
+gh skill list --dir .agents/skills
+gh skill update <skill> --dir .agents/skills --dry-run
+gh skill update <skill> --dir .agents/skills --all
+```
+
+`gh skill` is in preview; check `gh skill --help` for availability. Run project-scoped commands from Bub's workspace and use `--dir .agents/skills`; use `--dir "$HOME/.agents/skills"` for user-scoped skills. Keep gh's source-tracking metadata so installed skills can be updated.
+
 ## Tips
 
 - Use --web to open in browser
 - Use -R owner/repo to specify repository
 - Use --json with --jq for scripting
+- Use `GH_PROMPT_DISABLED=1` and supply required flags for unattended execution.
+- Write issue, PR, and comment body files as UTF-8 Markdown with real newlines. Pass them with `--body-file`, or use `--body-file -` with a quoted heredoc to preserve shell-sensitive text.
+- Use an explicit `--head` with `gh pr create` to avoid implicit pushes or forks; the head branch must already exist remotely.
