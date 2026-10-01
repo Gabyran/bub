@@ -55,7 +55,7 @@ def get_order(order_id: str) -> Order:
 
 Code mode lets the model call tools from Python instead of one tool call at a time. It is a per-session switch: send the comma command `,code_mode enable=true` (or `,code_mode enable=false`) to turn it on or off. The change applies from the next turn and persists across restarts. SDK callers can set `state["code_mode"] = True` instead. In a code-mode turn where `run_code` is among the allowed tools:
 
-- The model sees only tools marked `preserve=True` (`bash`, `bash.output`, `bash.kill`, `fs.read`, `fs.write`, `fs.edit`) plus `run_code(code: str) -> str`. Preserved tools are called directly only; they are not available under `tools.*`.
+- The model sees only tools marked `preserve=True` (`bash`, `bash.output`, `bash.kill`, `fs.read`, `fs.write`, `fs.edit`, `spill.read`) plus `run_code(code: str) -> str`. Preserved tools are called directly only; they are not available under `tools.*`.
 - Every other allowed tool is an async function inside `run_code`, named after its model-facing name (`tape.info` becomes `await tools.tape_info()`). Top-level `await` is allowed and `asyncio.gather` runs calls concurrently. Calls take keyword arguments, go through the usual `before_tool_call`/`after_tool_call` hooks, return structured results, and raise on failure.
 - Bub writes a Python stub with one function per non-preserved allowed tool — parameter and return types plus docstring — under `~/.bub/codemode/` and puts its path in the system prompt. The path stays the same for a session as long as its tool set does not change.
 - `run_code(code, timeout_seconds=120)` returns what the code writes to stdout. An uncaught exception becomes a tool error whose details carry the printed output and the traceback.

@@ -55,7 +55,7 @@ def get_order(order_id: str) -> Order:
 
 Code mode 让模型在 Python 中调用工具，而不必一次只发起一个工具调用。它是按 session 生效的开关：发送逗号命令 `,code_mode enable=true`（或 `,code_mode enable=false`）来开启或关闭，从下一个 turn 起生效，并在重启后保留。SDK 调用方也可以直接设置 `state["code_mode"] = True`。在开启 code mode 的 turn 中，只要 `run_code` 在允许的工具之内：
 
-- 模型只直接看到标记为 `preserve=True` 的工具（`bash`、`bash.output`、`bash.kill`、`fs.read`、`fs.write`、`fs.edit`）以及 `run_code(code: str) -> str`。preserve 工具只能直接调用，不会出现在 `tools.*` 中。
+- 模型只直接看到标记为 `preserve=True` 的工具（`bash`、`bash.output`、`bash.kill`、`fs.read`、`fs.write`、`fs.edit`、`spill.read`）以及 `run_code(code: str) -> str`。preserve 工具只能直接调用，不会出现在 `tools.*` 中。
 - 其他允许的工具在 `run_code` 中都是异步函数，名称使用面向模型的形式（`tape.info` 对应 `await tools.tape_info()`）。支持顶层 `await`，可以用 `asyncio.gather` 并发调用。调用只接受关键字参数，照常经过 `before_tool_call`/`after_tool_call` hook，返回结构化结果，失败时抛出异常。
 - Bub 会在 `~/.bub/codemode/` 下为允许的非 preserve 工具生成一个 Python stub 文件，每个工具对应一个函数，包含参数类型、返回类型和 docstring，并把文件路径写入 system prompt。只要工具集合不变，同一个 session 中这个路径保持不变。
 - `run_code(code, timeout_seconds=120)` 返回代码写到 stdout 的内容。未捕获的异常会变成工具错误，错误详情中包含已打印的输出和 traceback。

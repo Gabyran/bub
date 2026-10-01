@@ -289,15 +289,14 @@ async def test_unknown_handle_and_invalid_read_bounds_are_friendly(tmp_path: Pat
     root = _root_tape(tmp_path, InMemoryTapeStore())
     context = ToolContext(tape=root)
 
-    assert await spill_read.run(handle="missing", context=context) == {
-        "error": "[no spilled tool result for handle 'missing']"
-    }
+    assert await spill_read.run(handle="missing", context=context) == "[no spilled tool result for handle 'missing']"
     assert await _read_page(context, "missing", cursor=-1) == "`cursor` must be >= 0."
     assert await _read_page(context, "missing", count=0) == "`count` must be >= 1."
 
 
 def test_spill_read_uses_the_builtin_tool_naming_convention() -> None:
     assert spill_read.name == SPILL_READ_TOOL_NAME == "spill.read"
+    assert spill_read.preserve is True
     assert model_tools([spill_read])[0].name == SPILL_READ_MODEL_NAME == "spill_read"
     assert "spill_read(handle, cursor?, count?, from_end?)" in render_tools_prompt([spill_read])
 
