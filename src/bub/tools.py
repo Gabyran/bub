@@ -219,6 +219,10 @@ class Tool:
         )
 
 
+type ToolProvider = Callable[[list[Tool], Tape], Awaitable[tuple[list[Tool], str]]]
+"""Prepare registered tools and a prompt fragment for one model request."""
+
+
 def model_tools(tools: Iterable[Tool]) -> list[Tool]:
     """Convert agent-enabled runtime tools into model-safe aliases."""
     return [replace(tool_item, name=tool_item.name.replace(".", "_")) for tool_item in tools if tool_item.agent_use]

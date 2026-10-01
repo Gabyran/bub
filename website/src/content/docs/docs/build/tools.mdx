@@ -64,6 +64,12 @@ If `run_code` is not allowed (for example, a subagent restricted with `allowed_t
 
 `run_code` hands the code to the session [environment](#run-tools-in-an-environment)'s `run_code`, together with a `call_tool` callback. Tool calls always run on the host through that callback, so hooks still see every call. `timeout_seconds` cancels the environment call. The builtin `LocalEnvironment` starts a fresh Python process for every call (`sys.executable`, working directory is the workspace) and forwards tool calls as JSON lines over its stdin and stdout, so arguments and results must be JSON-serializable. When the code finishes, fails or times out, it kills the process and everything it started. That process runs on the host with the same permissions as `bash`, so enable code mode only where `bash` would be acceptable. The return annotation of a tool function (or `Tool.output_schema`, for tools built by hand) determines the result type shown in the stub.
 
+### Per-request tool presentation
+
+`Agent.tool_providers` accepts async callbacks `(tools, tape) -> (tools, tool_prompt)`. Bub applies the current tool scope and prepares code mode first, then runs these callbacks in registration order. They receive runtime names; model aliases are applied afterward. The returned tools and prompt fragment are used for that request.
+
+Providers prepare already registered tools; they do not register tools or change connection lifecycles. A plugin binds its discovery helper alongside its tools and keeps discovery within the supplied scope. Full native definitions are sent through the tool schema instead of repeated in the system prompt.
+
 ## Run tools in an environment
 
 `bash`, `bash.output`, `bash.kill` and `fs.*` do not touch the host directly: they run on the session's `Environment` (from [`bub.environment`](https://github.com/bubbuild/bub/blob/main/src/bub/environment.py)), which spawns processes, reads and writes text files, and runs code for `run_code`. Bub keeps the tool behavior — background shells, timeouts, rendering, hooks — on the host, so an environment only needs to implement a few operations:

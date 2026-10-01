@@ -64,6 +64,14 @@ Code mode 让模型在 Python 中调用工具，而不必一次只发起一个�
 
 `run_code` 会把代码和一个 `call_tool` 回调一起交给当前 session [执行环境](#在执行环境中运行工具)的 `run_code` 执行。工具调用始终经这个回调在宿主上执行，所以 hook 仍能看到每一次调用。超过 `timeout_seconds` 时会取消执行环境里的执行。builtin 的 `LocalEnvironment` 每次调用都会启动一个新的 Python 进程（使用 `sys.executable`，工作目录为 workspace），工具调用以 JSON 行的形式经进程的 stdin/stdout 转发，因此参数和结果都必须能 JSON 序列化。代码执行完、出错或超时后，它会杀掉该进程及其启动的所有子进程。这个进程直接跑在宿主上，权限与 `bash` 相同，因此只应在允许使用 `bash` 的场景下开启 code mode。stub 中的结果类型来自工具函数的返回注解（手动构造的工具则来自 `Tool.output_schema`）。
 
+
+### 每次请求的工具呈现
+
+`Agent.tool_providers` 接受异步回调 `(tools, tape) -> (tools, tool_prompt)`。Bub 先应用当前工具范围、准备 code mode，再按注册顺序执行这些回调。输入使用运行时名称，之后才转换模型别名；返回的工具及提示片段用于本次请求。
+
+provider 准备已注册的工具，工具注册与连接生命周期仍由插件管理。插件绑定自己的发现 helper，并将查询限制在传入范围内。完整原生定义通过工具 schema 发送，系统提示词不再重复列出。
+
+
 ## 在执行环境中运行工具
 
 `bash`、`bash.output`、`bash.kill` 和 `fs.*` 不直接操作宿主机，而是在当前 session 的 `Environment`（见 [`bub.environment`](https://github.com/bubbuild/bub/blob/main/src/bub/environment.py)）里启动进程、读写文本文件，`run_code` 的代码也在这里执行。工具本身的行为（后台 shell、超时、渲染、hook）都留在宿主上，所以一个执行环境只需要实现几个操作：
