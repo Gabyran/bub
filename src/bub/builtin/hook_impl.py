@@ -243,13 +243,10 @@ class BuiltinImpl:
 
     @hookimpl
     def system_prompt(self, prompt: str | list[dict], state: TurnState) -> str:
-        # Read the content of AGENTS.md under workspace
-        return (
-            DEFAULT_SYSTEM_PROMPT
-            + "\n\n<workspace_instruction>"
-            + self._read_agents_file(state)
-            + "\n</workspace_instruction>"
-        )
+        # Append the content of AGENTS.md under workspace, if any
+        if not (instructions := self._read_agents_file(state)):
+            return DEFAULT_SYSTEM_PROMPT
+        return f"{DEFAULT_SYSTEM_PROMPT}\n\n<workspace_instruction>\n{instructions}\n</workspace_instruction>"
 
     @hookimpl
     def provide_channels(self, message_handler: MessageHandler) -> list[Channel]:
